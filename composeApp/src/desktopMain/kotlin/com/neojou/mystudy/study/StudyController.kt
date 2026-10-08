@@ -2,6 +2,9 @@ package com.neojou.mystudy.study
 
 import com.neojou.mystudy.wiki.ask.AskPipeline
 import com.neojou.mystudy.wiki.ask.AskResult
+import com.neojou.mystudy.wiki.ask.PacketEdge
+import com.neojou.mystudy.wiki.ask.PacketPage
+import com.neojou.mystudy.wiki.ask.browseHits
 import com.neojou.mystudy.wiki.ask.proposeQueryFile
 import com.neojou.mystudy.wiki.index.NoteSummary
 import com.neojou.mystudy.wiki.index.WikiIndex
@@ -10,7 +13,6 @@ import com.neojou.mystudy.wiki.index.indexDatabasePath
 import com.neojou.mystudy.wiki.ingest.DraftResult
 import com.neojou.mystudy.wiki.ingest.ExtractResult
 import com.neojou.mystudy.wiki.ingest.IngestPipeline
-import com.neojou.mystudy.wiki.markdown.queryTerms
 import com.neojou.mystudy.wiki.model.Claim
 import com.neojou.mystudy.wiki.model.DraftProposal
 import com.neojou.mystudy.wiki.ollama.OllamaClient
@@ -110,6 +112,16 @@ class StudyController(
     var answer by mutableStateOf("")
         private set
     var askSources by mutableStateOf<List<String>>(emptyList())
+        private set
+    var askPages by mutableStateOf<List<PacketPage>>(emptyList())
+        private set
+    var askEdges by mutableStateOf<List<PacketEdge>>(emptyList())
+        private set
+    var tokenHits by mutableStateOf(0)
+        private set
+    var graphHits by mutableStateOf(0)
+        private set
+    var askReported by mutableStateOf(false)
         private set
     var askMessage by mutableStateOf("")
         private set
@@ -276,13 +288,7 @@ class StudyController(
             val hits = withContext(dbDispatcher) {
                 val current = index ?: return@withContext emptyList()
                 if (query.isBlank()) return@withContext current.listSummaries()
-                val terms = queryTerms(query)
-                val paths = linkedSetOf<String>()
-                paths += current.searchFts(terms, 40)
-                terms.filter { it.length == 2 }.forEach { term -> paths += current.searchLike(term, 40) }
-                paths.mapNotNull { path ->
-                    current.load(path)?.let { NoteSummary(it.path, it.title, it.type) }
-                }
+                browseHits(current, query)
             }
             searchHits = hits
         }
@@ -441,22 +447,46 @@ class StudyController(
             busy = true
             answer = ""
             askSources = emptyList()
+            askPages = emptyList()
+            askEdges = emptyList()
+            tokenHits = 0
+            graphHits = 0
+            askMessage = ""
+            askReported = false
             try {
                 val result = withContext(dbDispatcher) {
                     val current = index ?: return@withContext AskResult.NotCalled("Index is not open.")
                     AskPipeline(current, client()).ask(asked, settings.ollamaNumCtx)
                 }
                 when (result) {
-                    is AskResult.NoMatch -> askMessage = result.message
-                    is AskResult.NotCalled -> askMessage = result.message
+                    is AskResult.NoMatch -> {
+                        askMessage = result.message
+                        tokenHits = result.tokenHits
+                        graphHits = result.graphHits
+                        askReported = true
+                    }
+                    is AskResult.NotCalled -> {
+                        askMessage = result.message
+                        askReported = true
+                    }
                     is AskResult.Answer -> {
                         answer = result.text
                         askSources = result.sourcePaths
+                        askPages = result.pages
+                        askEdges = result.edges
+                        tokenHits = result.tokenHits
+                        graphHits = result.graphHits
                         askMessage = ""
+                        askReported = true
                     }
                 }
             } catch (caught: Exception) {
                 askMessage = caught.message ?: "Ask failed."
+                askPages = emptyList()
+                askEdges = emptyList()
+                tokenHits = 0
+                graphHits = 0
+                askReported = true
             } finally {
                 busy = false
             }

@@ -1,14 +1,27 @@
 package com.neojou.mystudy.wiki
 
-import com.neojou.mystudy.wiki.ask.AskBundle
+import com.neojou.mystudy.study.GraphHit
+import com.neojou.mystudy.study.MarkdownBlock
+import com.neojou.mystudy.study.circleLayout
+import com.neojou.mystudy.study.hitGraph
+import com.neojou.mystudy.study.inlineMarkdown
+import com.neojou.mystudy.study.markdownBlocks
+import com.neojou.mystudy.wiki.ask.ASK_SYSTEM
 import com.neojou.mystudy.wiki.ask.AskPipeline
 import com.neojou.mystudy.wiki.ask.AskResult
-import com.neojou.mystudy.wiki.ask.Excerpt
-import com.neojou.mystudy.wiki.ask.Fit
-import com.neojou.mystudy.wiki.ask.excludedAskPath
-import com.neojou.mystudy.wiki.ask.fitAskPrompt
-import com.neojou.mystudy.wiki.ask.mergeCandidates
+import com.neojou.mystudy.wiki.ask.DraftPage
+import com.neojou.mystudy.wiki.ask.GraphNode
+import com.neojou.mystudy.wiki.ask.PacketEdge
+import com.neojou.mystudy.wiki.ask.PacketPage
+import com.neojou.mystudy.wiki.ask.WikiGraph
+import com.neojou.mystudy.wiki.ask.documentFrequency
+import com.neojou.mystudy.wiki.ask.hopScore
+import com.neojou.mystudy.wiki.ask.limitPacket
+import com.neojou.mystudy.wiki.ask.schemaExcerpt
+import com.neojou.mystudy.wiki.ask.scoreNote
 import com.neojou.mystudy.wiki.index.WikiIndex
+import com.neojou.mystudy.wiki.index.ftsQuery
+import com.neojou.mystudy.wiki.markdown.analyzeQuery
 import com.neojou.mystudy.wiki.ingest.IngestPipeline
 import com.neojou.mystudy.wiki.ingest.ExtractResult
 import com.neojou.mystudy.wiki.ingest.buildIngestProposal
@@ -39,11 +52,15 @@ import java.time.LocalDate
 import kotlin.io.path.readBytes
 import kotlin.io.path.readText
 import kotlin.io.path.writeText
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import kotlin.math.ln
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFails
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -243,58 +260,246 @@ class WikiBehaviorTest {
     }
 
     @Test
-    fun emptyAskDoesNotCallTheModelAndCatalogOutranksFts() {
+    fun queryAnalysisEmitsCjkBigramsNotSingleCharacters() {
+        val analysis = analyzeQuery("什麼是卡片盒筆記法")
+        assertEquals("卡片盒筆記法", analysis.phrase)
+        assertEquals(listOf("卡片", "片盒", "盒筆", "筆記", "記法"), analysis.bigrams)
+        assertTrue(analysis.bigrams.none { it == "原子" || it.length == 1 })
+        assertTrue(analysis.ftsTerms.all { it.length >= 3 })
+        assertNull(ftsQuery(listOf("原子", "卡")))
+        assertEquals("\"卡片盒\"", ftsQuery(listOf("原子", "卡片盒")))
+    }
+
+    @Test
+    fun cardQuestionOutranksAGenericFalseFriendAndAddsOneGraphHop() {
+        val root = scaffoldWiki(tempDir())
+        writeWikiPage(
+            root,
+            "wiki/concepts/卡片盒筆記法.md",
+            "卡片盒筆記法",
+            "concept",
+            emptyList(),
+            emptyList(),
+            "卡片盒筆記法把一則想法寫成一張卡片。\n見 [[閃卡]] 的做法。\n",
+        )
+        writeWikiPage(
+            root,
+            "wiki/concepts/其他.md",
+            "其他說明",
+            "concept",
+            emptyList(),
+            emptyList(),
+            "有人把卡片盒筆記法寫在正文裡。\n",
+        )
+        writeWikiPage(
+            root,
+            "wiki/concepts/閃卡.md",
+            "閃卡",
+            "concept",
+            emptyList(),
+            emptyList(),
+            "閃卡用來回憶。\n",
+        )
+        writeWikiPage(
+            root,
+            "wiki/concepts/原子設計.md",
+            "原子設計",
+            "concept",
+            listOf("原子"),
+            emptyList(),
+            "原子化是另一件事。\n",
+        )
+        for (title in listOf("蘋果", "香蕉", "橙子", "葡萄", "西瓜", "芒果")) {
+            writeWikiPage(root, "wiki/concepts/$title.md", title, "concept", emptyList(), emptyList(), "水果。\n")
+        }
+        root.resolve("raw").resolve("loose.md").writeText("# 卡片盒筆記法\n\n全文\n")
+        var system = ""
+        var prompt = ""
+        WikiIndex.open(root, tempDir().resolve("rank.sqlite")).use { index ->
+            index.reconcileAll()
+            assertTrue(index.pathsForAlias("原子").contains("wiki/concepts/原子設計.md"))
+            val analysis = analyzeQuery("什麼是卡片盒筆記法與原子")
+            val frequency = documentFrequency(index, analysis.bigrams + analysis.extras)
+            val count = index.askNoteCount()
+            val zettel = assertNotNull(scoreNote(index.load("wiki/concepts/卡片盒筆記法.md")!!, analysis, frequency, count))
+            val other = assertNotNull(scoreNote(index.load("wiki/concepts/其他.md")!!, analysis, frequency, count))
+            val atomic = assertNotNull(scoreNote(index.load("wiki/concepts/原子設計.md")!!, analysis, frequency, count))
+            assertTrue(zettel.canSeed)
+            assertTrue(other.canSeed)
+            assertFalse(atomic.canSeed)
+            assertTrue(zettel.score > other.score)
+            assertTrue(zettel.score > atomic.score)
+            val result = AskPipeline(index, ChatClient { request ->
+                system = request.system
+                prompt = request.user
+                "原子化見 wiki/concepts/atomic-design-原子設計.md"
+            }).ask("什麼是卡片盒筆記法與原子", 65536)
+            val answer = assertIs<AskResult.Answer>(result)
+            assertEquals(ASK_SYSTEM, system)
+            assertFalse(prompt.contains("## Catalog"))
+            assertTrue(prompt.contains("[1]"))
+            assertTrue(prompt.contains("規則節錄（不是答案，不要引用）："))
+            assertTrue(prompt.contains("## Frontmatter"))
+            assertFalse(prompt.contains("This folder is an llm-wiki"))
+            val schema = root.resolve("wiki").resolve("schema.md").readText()
+            val excerpt = schemaExcerpt(schema)
+            assertTrue(excerpt.length < schema.length)
+            assertTrue(excerpt.length <= 800)
+            assertTrue(prompt.contains(excerpt))
+            assertEquals(
+                listOf("wiki/concepts/卡片盒筆記法.md", "wiki/concepts/其他.md", "wiki/concepts/閃卡.md"),
+                answer.pages.map { it.path },
+            )
+            assertEquals(listOf(1, 2, 3), answer.pages.map { it.number })
+            assertEquals(1, answer.graphHits)
+            assertTrue(answer.pages[2].fromGraph)
+            assertTrue(answer.tokenHits >= 3)
+            assertTrue(answer.pages.none { it.path.contains("原子") || it.path.startsWith("raw/") || it.path == "wiki/index.md" })
+            assertEquals(answer.pages.map { it.path }, answer.sourcePaths)
+            assertTrue(answer.text.contains("atomic-design-原子設計.md"))
+            assertTrue(answer.edges.any { it.line.contains("[[閃卡]]") })
+            assertTrue(prompt.indexOf("wiki/concepts/卡片盒筆記法.md") < prompt.indexOf("wiki/concepts/其他.md"))
+        }
+    }
+
+    @Test
+    fun genericOnlyOverlapDoesNotCallTheModel() {
         val root = scaffoldWiki(tempDir())
         WikiIndex.open(root, tempDir().resolve("empty.sqlite")).use { index ->
             index.reconcileAll()
             var calls = 0
-            val result = AskPipeline(index, ChatClient { calls += 1; "no" }).ask("什麼是注意力機制", 65536)
-            assertIs<AskResult.NoMatch>(result)
+            val empty = AskPipeline(index, ChatClient { calls += 1; "no" }).ask("什麼是注意力機制", 65536)
+            assertIs<AskResult.NoMatch>(empty)
             assertEquals(0, calls)
         }
-        val ranked = scaffoldWiki(tempDir())
-        ranked.resolve("wiki").resolve("index.md").writeText(
-            """
-            # Index
-
-            ## Concepts
-
-            - [[concepts/special]] — 特殊標記 · type: concept · sources: raw/s.md
-            """.trimIndent(),
+        val generic = scaffoldWiki(tempDir())
+        writeWikiPage(
+            generic,
+            "wiki/concepts/原子設計.md",
+            "原子設計",
+            "concept",
+            listOf("原子"),
+            emptyList(),
+            "原子化是另一件事。\n",
         )
-        ranked.resolve("wiki").resolve("concepts").resolve("special.md").writeText("# Special\n\na quiet page\n")
-        ranked.resolve("wiki").resolve("concepts").resolve("other.md").writeText("# Other\n\n這裡提到特殊標記一次\n")
-        var prompt = ""
-        WikiIndex.open(ranked, tempDir().resolve("rank.sqlite")).use { index ->
+        WikiIndex.open(generic, tempDir().resolve("generic.sqlite")).use { index ->
             index.reconcileAll()
-            val result = AskPipeline(index, ChatClient { request ->
-                prompt = request.user
-                "見 wiki/concepts/special.md"
-            }).ask("特殊標記在哪裡", 65536)
-            assertIs<AskResult.Answer>(result)
+            var calls = 0
+            val result = AskPipeline(index, ChatClient { calls += 1; "no" }).ask("什麼是卡片盒筆記法與原子", 65536)
+            val missed = assertIs<AskResult.NoMatch>(result)
+            assertEquals(0, calls)
+            assertTrue(missed.tokenHits >= 1)
+            assertEquals(0, missed.graphHits)
         }
-        assertTrue(prompt.indexOf("wiki/concepts/special.md") < prompt.indexOf("wiki/concepts/other.md"))
-        val merged = mergeCandidates(
-            listOf("wiki/concepts/special.md"),
-            listOf("wiki/concepts/other.md"),
-            ::excludedAskPath,
-        )
-        assertEquals(listOf("wiki/concepts/special.md", "wiki/concepts/other.md"), merged)
     }
 
     @Test
-    fun promptBudgetShedsHopsAndRefusesAnOverlongRawNote() {
-        val page = Excerpt("wiki/concepts/a.md", "a", emptyList(), "p".repeat(500))
-        val hop = Excerpt("wiki/concepts/b.md", "b", emptyList(), "h".repeat(5000))
-        val fit = fitAskPrompt("sys", AskBundle(listOf("line"), listOf(page), listOf(hop)), budget = 800)
-        val ready = assertIs<Fit.Ready>(fit)
-        assertTrue(ready.bundle.hops.isEmpty())
-        assertEquals(1, ready.bundle.pages.size)
-        val over = fitAskPrompt("s".repeat(50), AskBundle(emptyList(), listOf(page.copy(text = "p".repeat(5000))), emptyList()), 200)
-        assertIs<Fit.Over>(over)
+    fun phraseInTitleStillRetrievesAtomicDesign() {
+        val root = scaffoldWiki(tempDir())
+        writeWikiPage(
+            root,
+            "wiki/concepts/原子設計.md",
+            "原子設計",
+            "concept",
+            listOf("原子"),
+            emptyList(),
+            "原子化是另一件事。\n",
+        )
+        WikiIndex.open(root, tempDir().resolve("phrase.sqlite")).use { index ->
+            index.reconcileAll()
+            var calls = 0
+            val result = AskPipeline(index, ChatClient { calls += 1; "是一種設計方法" }).ask("什麼是原子設計", 65536)
+            val answer = assertIs<AskResult.Answer>(result)
+            assertEquals(1, calls)
+            assertEquals("wiki/concepts/原子設計.md", answer.pages.single().path)
+            assertEquals(listOf("wiki/concepts/原子設計.md"), answer.sourcePaths)
+        }
+    }
+
+    @Test
+    fun oneHopScoreUsesDirectSourcesAdamicAndSameType() {
+        val left = GraphNode(
+            "wiki/concepts/a.md",
+            "甲",
+            "concept",
+            setOf("raw/s.md"),
+            setOf("wiki/concepts/b.md", "wiki/concepts/n.md"),
+            emptyMap(),
+        )
+        val right = GraphNode(
+            "wiki/concepts/b.md",
+            "乙",
+            "concept",
+            setOf("raw/s.md"),
+            setOf("wiki/concepts/a.md", "wiki/concepts/n.md"),
+            emptyMap(),
+        )
+        val hub = GraphNode(
+            "wiki/concepts/n.md",
+            "丙",
+            "concept",
+            emptySet(),
+            setOf("wiki/concepts/a.md", "wiki/concepts/b.md"),
+            emptyMap(),
+        )
+        val graph = WikiGraph(mapOf(left.path to left, right.path to right, hub.path to hub))
+        val expected = 3.0 + 4.0 + 1.5 / ln(2.0) + 1.0
+        assertEquals(expected, hopScore(left, right, graph), 0.0001)
+        val entity = right.copy(type = "entity")
+        val mixed = WikiGraph(mapOf(left.path to left, entity.path to entity, hub.path to hub))
+        assertEquals(expected - 1.0, hopScore(left, entity, mixed), 0.0001)
+    }
+
+    @Test
+    fun limitPacketCapsPagesAndExtractStillRefusesAHugeRawNote() {
+        val pages = (1..9).map { number ->
+            DraftPage("wiki/concepts/$number.md", "$number", "concept", "字".repeat(1_000), fromGraph = number > 5)
+        }
+        val limited = limitPacket(pages, 6_000)
+        assertEquals(6, limited.size)
+        assertEquals("wiki/concepts/1.md", limited.first().path)
+        assertEquals("wiki/concepts/6.md", limited.last().path)
+        val shortened = limitPacket(
+            listOf(DraftPage("wiki/concepts/a.md", "a", "concept", "字".repeat(2_000), false)),
+            400,
+        )
+        assertEquals(400, shortened.single().text.length)
         val pipeline = IngestPipeline(ChatClient { error("should not be called") })
         val stopped = pipeline.extract("字".repeat(100_000), 65536)
         assertIs<ExtractResult.Stopped>(stopped)
+    }
+
+    @Test
+    fun markdownRendererDropsMarkerCharacters() {
+        val blocks = markdownBlocks("# 標題\n\n這是**重點**與*斜體*和`程式`\n\n- 一項\n\n```\ncode\n```\n")
+        assertIs<MarkdownBlock.Heading>(blocks[0])
+        assertEquals("標題", (blocks[0] as MarkdownBlock.Heading).text)
+        val paragraph = assertIs<MarkdownBlock.Paragraph>(blocks[1])
+        assertEquals("這是重點與斜體和程式", inlineMarkdown(paragraph.text).text)
+        assertFalse(inlineMarkdown(paragraph.text).text.contains("**"))
+        assertFalse(inlineMarkdown(paragraph.text).text.contains("`"))
+        assertIs<MarkdownBlock.Bullet>(blocks[2])
+        val code = assertIs<MarkdownBlock.Code>(blocks[3])
+        assertEquals("code", code.text)
+    }
+
+    @Test
+    fun answerGraphPrefersANodeOverAnEdge() {
+        val pages = listOf(
+            PacketPage(1, "wiki/concepts/a.md", "甲", "concept", "", false),
+            PacketPage(2, "wiki/concepts/b.md", "乙", "entity", "", true),
+        )
+        val points = circleLayout(pages, Size(400f, 400f), 28f)
+        val edges = listOf(PacketEdge("wiki/concepts/a.md", "wiki/concepts/b.md", "見 [[乙]]"))
+        val node = assertIs<GraphHit.Node>(hitGraph(points, edges, points[0].center, 28f, 12f))
+        assertEquals("wiki/concepts/a.md", node.path)
+        val middle = Offset(
+            (points[0].center.x + points[1].center.x) / 2f,
+            (points[0].center.y + points[1].center.y) / 2f,
+        )
+        val edge = assertIs<GraphHit.Edge>(hitGraph(points, edges, middle, 28f, 12f))
+        assertEquals("見 [[乙]]", edge.line)
+        assertIs<GraphHit.Miss>(hitGraph(points, edges, Offset(1f, 1f), 28f, 8f))
     }
 
     @Test
@@ -396,6 +601,44 @@ private fun tempDir(): Path = Files.createTempDirectory("mystudy-wiki")
 private fun writeConcept(root: Path, name: String, title: String, aliases: List<String>) {
     root.resolve("wiki").resolve("concepts").resolve(name).writeText(conceptText(title, aliases))
 }
+
+private fun writeWikiPage(
+    root: Path,
+    relative: String,
+    title: String,
+    type: String,
+    aliases: List<String>,
+    sources: List<String>,
+    body: String,
+) {
+    val file = root.resolve(relative)
+    Files.createDirectories(file.parent)
+    file.writeText(
+        buildString {
+            append("---\n")
+            append("title: \"")
+            append(title)
+            append("\"\n")
+            append("type: ")
+            append(type)
+            append("\n")
+            append("tags: []\n")
+            append("aliases: ")
+            append(yamlList(aliases))
+            append("\n")
+            append("sources: ")
+            append(yamlList(sources))
+            append("\n")
+            append("updated: \"2026-10-08\"\n")
+            append("---\n\n")
+            append(body.trim())
+            append('\n')
+        },
+    )
+}
+
+private fun yamlList(values: List<String>): String =
+    if (values.isEmpty()) "[]" else values.joinToString(prefix = "[", postfix = "]") { "\"$it\"" }
 
 private fun conceptText(title: String, aliases: List<String> = emptyList()): String {
     val aliasBlock = if (aliases.isEmpty()) "[]" else aliases.joinToString(prefix = "[", postfix = "]") { "\"$it\"" }

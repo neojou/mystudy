@@ -159,22 +159,68 @@ private fun unquote(value: String): String {
     return value
 }
 
-fun queryTerms(question: String): List<String> {
-    val cjk = Regex("[\\p{IsHan}]{2,}").findAll(question).flatMap { match -> cjkPieces(match.value) }
-    val latin = Regex("[A-Za-z][A-Za-z0-9_]{2,}").findAll(question).map { it.value }
-    return (cjk + latin).distinct().toList()
+/**
+ * Pieces of one question.
+ *
+ * Tokenization stays local, as in llm-wiki `tokenize_query`: overlapping CJK bigrams, not an Ollama call.
+ * Retrieval has to decide "nothing matches" before the model is allowed to run.
+ * Single Han characters are not emitted. FTS5 trigram cannot MATCH a 2-character token, so [ftsTerms] are length ≥ 3.
+ */
+data class QueryAnalysis(
+    val phrase: String,
+    val bigrams: List<String>,
+    val extras: List<String>,
+    val ftsTerms: List<String>,
+)
+
+private val hanStops = listOf("什麼", "什么", "與否", "與", "与", "對於", "對", "对", "從", "从")
+private val hanStopChars = setOf('是', '的', '了', '在', '有', '和')
+private val latinStops = setOf(
+    "the", "is", "a", "an", "what", "how", "are", "was", "were",
+    "do", "does", "did", "be", "been", "being", "have", "has", "had",
+    "it", "its", "in", "on", "at", "to", "for", "of", "with", "by",
+    "this", "that", "these", "those",
+)
+
+fun analyzeQuery(question: String): QueryAnalysis {
+    val lower = question.lowercase(Locale.ROOT)
+    val pieces = Regex("[\\p{IsHan}]+").findAll(lower).flatMap { match ->
+        stripHanStops(match.value).split(Regex("\\s+")).filter { it.length >= 2 }
+    }.toList()
+    val phrase = pieces.maxByOrNull { it.length }.orEmpty()
+    val bigrams = pieces.flatMap { bigramsOf(it) }.distinct()
+    val extras = Regex("[a-z][a-z0-9_]{2,}").findAll(lower).map { it.value }.filter { it !in latinStops }.distinct().toList()
+    val fts = (pieces.flatMap { ftsWindows(it) } + extras).filter { it.length >= 3 }.distinct()
+    return QueryAnalysis(phrase, bigrams, extras, fts)
 }
 
-private fun cjkPieces(run: String): List<String> {
-    if (run.length <= 4) return listOf(run)
-    val parts = mutableListOf<String>()
-    var index = 0
-    while (index + 4 <= run.length) {
-        parts += run.substring(index, index + 4)
-        index += 2
+private fun stripHanStops(run: String): String {
+    var text = run
+    for (stop in hanStops.sortedByDescending { it.length }) {
+        text = text.replace(stop, " ")
     }
-    if (run.length <= 12) parts += run
-    return parts
+    return buildString {
+        for (ch in text) {
+            if (ch in hanStopChars) append(' ') else append(ch)
+        }
+    }
+}
+
+private fun bigramsOf(run: String): List<String> {
+    if (run.length < 2) return emptyList()
+    return (0 until run.length - 1).map { run.substring(it, it + 2) }
+}
+
+private fun ftsWindows(run: String): List<String> {
+    if (run.length < 3) return emptyList()
+    val windows = mutableListOf<String>()
+    if (run.length <= 12) windows += run
+    var index = 0
+    while (index + 3 <= run.length) {
+        windows += run.substring(index, index + 3)
+        index += 1
+    }
+    return windows
 }
 
 fun safeFileStem(title: String): String {

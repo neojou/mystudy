@@ -57,6 +57,7 @@ class WikiIndex private constructor(
 ) : AutoCloseable {
     private val byAlias = HashMap<String, MutableSet<String>>()
     private val byTag = HashMap<String, MutableSet<String>>()
+    private var graphCache: com.neojou.mystudy.wiki.ask.WikiGraph? = null
 
     fun reconcileAll() {
         val found = linkedSetOf<String>()
@@ -112,21 +113,25 @@ class WikiIndex private constructor(
             statement.setString(1, relative)
             statement.executeQuery().use { rows ->
                 if (!rows.next()) return null
-                val front = parseJsonObject(rows.getString(6))
-                return NoteRecord(
-                    path = rows.getString(1),
-                    title = rows.getString(2),
-                    type = rows.getString(3) ?: "",
-                    headings = parseJsonList(rows.getString(4)),
-                    body = rows.getString(5) ?: "",
-                    tags = jsonList(front, "tags"),
-                    aliases = jsonList(front, "aliases"),
-                    sources = jsonList(front, "sources"),
-                    contentHash = rows.getString(7),
-                    frontmatterUnparsed = rows.getInt(8) == 1,
-                )
+                return noteFrom(rows)
             }
         }
+    }
+
+    private fun noteFrom(rows: java.sql.ResultSet): NoteRecord {
+        val front = parseJsonObject(rows.getString(6))
+        return NoteRecord(
+            path = rows.getString(1),
+            title = rows.getString(2),
+            type = rows.getString(3) ?: "",
+            headings = parseJsonList(rows.getString(4)),
+            body = rows.getString(5) ?: "",
+            tags = jsonList(front, "tags"),
+            aliases = jsonList(front, "aliases"),
+            sources = jsonList(front, "sources"),
+            contentHash = rows.getString(7),
+            frontmatterUnparsed = rows.getInt(8) == 1,
+        )
     }
 
     fun searchFts(terms: List<String>, limit: Int): List<String> {
@@ -217,6 +222,74 @@ class WikiIndex private constructor(
         "SELECT path FROM notes WHERE path = ?",
         relative,
     ) != null
+
+    fun notesForAsk(): List<NoteRecord> {
+        val out = mutableListOf<NoteRecord>()
+        connection.createStatement().use { statement ->
+            statement.executeQuery(
+                """
+                SELECT path, title, type, headings_json, body, frontmatter_json, content_hash, frontmatter_unparsed
+                FROM notes
+                WHERE path LIKE 'wiki/%'
+                  AND path NOT IN ('wiki/index.md', 'wiki/log.md', 'wiki/schema.md')
+                ORDER BY path
+                """.trimIndent(),
+            ).use { rows ->
+                while (rows.next()) out += noteFrom(rows)
+            }
+        }
+        return out
+    }
+
+    fun linkRows(): List<Pair<String, String>> {
+        val out = mutableListOf<Pair<String, String>>()
+        connection.createStatement().use { statement ->
+            statement.executeQuery("SELECT src_path, target_raw FROM links").use { rows ->
+                while (rows.next()) out += rows.getString(1) to rows.getString(2)
+            }
+        }
+        return out
+    }
+
+    fun askNoteCount(): Int {
+        connection.createStatement().use { statement ->
+            statement.executeQuery(
+                """
+                SELECT COUNT(*) FROM notes
+                WHERE path LIKE 'wiki/%'
+                  AND path NOT IN ('wiki/index.md', 'wiki/log.md', 'wiki/schema.md')
+                """.trimIndent(),
+            ).use { rows ->
+                return if (rows.next()) rows.getInt(1) else 0
+            }
+        }
+    }
+
+    fun countAskTerm(term: String): Int {
+        val pattern = likePattern(term)
+        connection.prepareStatement(
+            """
+            SELECT COUNT(*) FROM notes
+            WHERE path LIKE 'wiki/%'
+              AND path NOT IN ('wiki/index.md', 'wiki/log.md', 'wiki/schema.md')
+              AND (title LIKE ? ESCAPE '\' OR body LIKE ? ESCAPE '\' OR headings_json LIKE ? ESCAPE '\')
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setString(1, pattern)
+            statement.setString(2, pattern)
+            statement.setString(3, pattern)
+            statement.executeQuery().use { rows ->
+                return if (rows.next()) rows.getInt(1) else 0
+            }
+        }
+    }
+
+    fun wikiGraph(): com.neojou.mystudy.wiki.ask.WikiGraph {
+        graphCache?.let { return it }
+        val built = com.neojou.mystudy.wiki.ask.buildWikiGraph(this)
+        graphCache = built
+        return built
+    }
 
     override fun close() {
         connection.close()
@@ -405,6 +478,7 @@ class WikiIndex private constructor(
     }
 
     private fun reloadMaps() {
+        graphCache = null
         byAlias.clear()
         byTag.clear()
         connection.createStatement().use { statement ->

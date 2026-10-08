@@ -203,14 +203,37 @@ fun AskPane(controller: StudyController, modifier: Modifier = Modifier) {
         if (controller.askMessage.isNotBlank()) {
             Text(controller.askMessage)
         }
-        if (controller.askSources.isNotEmpty()) {
-            Text("Sources", style = MaterialTheme.typography.titleSmall)
-            controller.askSources.forEach { path ->
-                Text(path.substringAfterLast('/'), style = MaterialTheme.typography.bodyMedium)
-            }
+        if (controller.askReported) {
+            Text("tokenHits=${controller.tokenHits}  graphHits=${controller.graphHits}")
         }
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
-            Text(controller.answer, style = MaterialTheme.typography.bodyMedium)
+            if (controller.answer.isNotBlank()) {
+                MarkdownText(controller.answer)
+            }
+            if (controller.askPages.isNotEmpty()) {
+                Text("Citations", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 8.dp))
+                controller.askPages.forEach { page ->
+                    Text(
+                        text = "[${page.number}] ${page.title} — ${page.path}",
+                        color = MaterialTheme.colorScheme.primary,
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { controller.openIndexed(page.path) }
+                            .padding(vertical = 2.dp),
+                    )
+                }
+            }
+            AnswerGraph(
+                pages = controller.askPages,
+                edges = controller.askEdges,
+                onOpen = controller::openIndexed,
+            )
+            val opened = controller.askPages.firstOrNull { it.path == controller.previewTitle }
+            if (opened != null && controller.openNote.isNotBlank()) {
+                Text(opened.path, style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 8.dp))
+                Text(controller.openNote, style = MaterialTheme.typography.bodyMedium)
+            }
         }
     }
 }
