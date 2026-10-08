@@ -7,20 +7,29 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
+import com.neojou.mystudy.study.FileBrowserIcon
+import com.neojou.mystudy.study.StudyMode
+import com.neojou.mystudy.study.StudyPane
 import com.neojou.tools.LogLevel
 import com.neojou.tools.MyLog
 import com.neojou.tools.ui.menu.MyTopMenuBar
@@ -32,32 +41,34 @@ import com.neojou.tools.ui.menu.MyTopMenuItem
 private const val TAG = "Home"
 
 /**
- * Main content modes for the shell area below the toolbar.
- */
-private enum class MainContent {
-    /** Default placeholder until a feature is chosen. */
-    Home,
-
-    /** Daily candlestick + volume chart (viewport pan/zoom). */
-    KChart,
-}
-
-/**
  * Primary application shell.
  *
- * Hosts a product-configured [MyTopMenuBar] and content area.
- * - Database → Input / View / Export / Import
- * - K Chart → View / Settings（均線 + KD + MACD 參數）
+ * Hosts [MyTopMenuBar] and the study surface. The file-browser icon at the upper left
+ * opens the vault tree. About stays the first menu item.
  */
 @Composable
 fun HomeScreen(about: AboutRequest) {
-    // Product-specific menu tree only; [MyTopMenuBar] stays app-agnostic.
-    // Rebuilt each composition so callbacks always see current shell state.
+    var mode by remember { mutableStateOf(StudyMode.Home) }
+    var fileBrowserOpen by remember { mutableStateOf(true) }
     val topMenus = listOf(
         MyTopMenuItem(
             id = "about",
             label = "About",
             onClick = about::show,
+        ),
+        MyTopMenuItem(
+            id = "wiki",
+            label = "Wiki",
+            children = listOf(
+                MyTopMenuItem(id = "browse", label = "Browse", onClick = { mode = StudyMode.Browse }),
+                MyTopMenuItem(id = "ingest", label = "Ingest", onClick = { mode = StudyMode.Ingest }),
+                MyTopMenuItem(id = "ask", label = "Ask", onClick = { mode = StudyMode.Ask }),
+            ),
+        ),
+        MyTopMenuItem(
+            id = "settings",
+            label = "Settings",
+            onClick = { mode = StudyMode.Settings },
         ),
     )
 
@@ -67,17 +78,24 @@ fun HomeScreen(about: AboutRequest) {
 
     Scaffold(
         topBar = {
-            MyTopMenuBar(items = topMenus)
+            MyTopMenuBar(
+                items = topMenus,
+                leading = {
+                    IconButton(onClick = { fileBrowserOpen = !fileBrowserOpen }) {
+                        FileBrowserIcon(Modifier.size(20.dp))
+                    }
+                },
+            )
         },
     ) { innerPadding ->
-        Box(
+        StudyPane(
+            mode = mode,
+            fileBrowserOpen = fileBrowserOpen,
+            onMode = { mode = it },
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(AppVersion.APP_NAME)
-        }
+        )
     }
 }
 

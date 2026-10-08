@@ -3,6 +3,7 @@ package com.neojou.tools.ui.menu
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
+import androidx.compose.ui.Alignment
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -34,11 +35,13 @@ import androidx.compose.ui.unit.dp
 fun MyTopMenuBar(
     items: List<MyTopMenuItem>,
     barModifier: Modifier = Modifier,
+    leading: @Composable () -> Unit = {},
 ) {
     TopAppBar(
         modifier = barModifier,
         title = {
-            Row {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                leading()
                 items.forEachIndexed { index, item ->
                     val itemModifier = if (index == 0) {
                         Modifier

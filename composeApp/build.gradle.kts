@@ -1,6 +1,4 @@
-// KMP : Desktop + WasmJs
-
-import org.jetbrains.kotlin.gradle.ExperimentalWasmDsl
+// Desktop JVM only. Do not add Android, iOS, or Web targets.
 
 plugins {
     alias(libs.plugins.kotlinMultiplatform)
@@ -33,6 +31,14 @@ kotlin {
         val desktopMain by getting {
             dependencies {
                 implementation(compose.desktop.currentOs)
+                implementation(libs.sqlite.jdbc)
+                implementation(libs.kotlinx.coroutines.swing)
+                implementation(libs.kotlinx.serialization.json)
+            }
+        }
+        val desktopTest by getting {
+            dependencies {
+                implementation(kotlin("test"))
             }
         }
     }
