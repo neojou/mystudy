@@ -28,7 +28,11 @@ import kotlin.io.path.isDirectory
 import kotlin.io.path.name
 
 /**
- * Left rail of the vault. Wiki files are tinted. Ingest is offered only outside the wiki root.
+ * File browser for the vault.
+ *
+ * Every row, including the vault root, shows only the last path segment
+ * (for example `第二大腦`), never the absolute path. The full path stays in Settings.
+ * Wiki files are tinted. Ingest is offered only outside the wiki root.
  */
 @Composable
 fun FileTreePane(
@@ -88,7 +92,7 @@ private fun VaultNode(
     val wikiHere = wikiRoot != null && samePath(path, wikiRoot)
     val label = buildString {
         if (directory) append(if (open) "▾ " else "▸ ")
-        append(if (depth == 0) path.toString() else path.name)
+        append(vaultTreeLabel(path))
         if (wikiHere) append("  · wiki")
     }
     val rowModifier = Modifier
@@ -137,6 +141,9 @@ private fun VaultNode(
         }
     }
 }
+
+/** Last path segment shown in the file browser. A nameless root falls back to the whole path. */
+internal fun vaultTreeLabel(path: Path): String = path.name.ifEmpty { path.toString() }
 
 private fun samePath(left: Path, right: Path): Boolean = try {
     left.toRealPath() == right.toRealPath()

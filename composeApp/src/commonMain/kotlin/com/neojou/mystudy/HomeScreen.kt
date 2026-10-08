@@ -44,7 +44,8 @@ private const val TAG = "Home"
  * Primary application shell.
  *
  * Hosts [MyTopMenuBar] and the study surface. The file-browser icon at the upper left
- * opens the vault tree. About stays the first menu item.
+ * opens the vault tree. The tree root shows only the vault folder's last path segment.
+ * About stays the first menu item.
  */
 @Composable
 fun HomeScreen(about: AboutRequest) {

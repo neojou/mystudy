@@ -4,6 +4,7 @@ import com.neojou.mystudy.study.GraphHit
 import com.neojou.mystudy.study.MarkdownBlock
 import com.neojou.mystudy.study.circleLayout
 import com.neojou.mystudy.study.hitGraph
+import com.neojou.mystudy.study.vaultTreeLabel
 import com.neojou.mystudy.study.inlineMarkdown
 import com.neojou.mystudy.study.markdownBlocks
 import com.neojou.mystudy.wiki.ask.ASK_SYSTEM
@@ -65,6 +66,13 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class WikiBehaviorTest {
+    @Test
+    fun fileBrowserShowsOnlyTheLastPathSegment() {
+        assertEquals("第二大腦", vaultTreeLabel(Path.of("/Users/neojou/Knowledge/第二大腦")))
+        assertEquals("raw", vaultTreeLabel(Path.of("/Users/neojou/Knowledge/第二大腦/raw")))
+        assertEquals("/", vaultTreeLabel(Path.of("/")))
+    }
+
     @Test
     fun finderAcceptsANestedRootAndIgnoresAnOutsideSymlink() {
         val vault = tempDir()
