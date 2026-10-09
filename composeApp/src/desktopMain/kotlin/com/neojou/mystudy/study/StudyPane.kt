@@ -83,13 +83,6 @@ actual fun StudyPane(
             onDismiss = controller::dismissChoices,
         )
     }
-    if (controller.stagePaths.isNotEmpty()) {
-        StageDialog(
-            count = controller.stagePaths.size,
-            onConfirm = controller::confirmStage,
-            onDismiss = controller::dismissStage,
-        )
-    }
     controller.proposal?.let { proposal ->
         ConfirmWriteDialog(
             proposal = proposal,

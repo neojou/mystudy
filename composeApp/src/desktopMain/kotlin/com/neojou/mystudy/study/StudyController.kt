@@ -21,14 +21,13 @@ import com.neojou.mystudy.wiki.settings.AppSettings
 import com.neojou.mystudy.wiki.settings.SettingsStore
 import com.neojou.mystudy.wiki.settings.StudySettings
 import com.neojou.mystudy.wiki.vault.Discovery
-import com.neojou.mystudy.wiki.vault.MAX_DIRECTORY_INGEST
 import com.neojou.mystudy.wiki.vault.applyProposal
 import com.neojou.mystudy.wiki.vault.discoverWikiRoot
 import com.neojou.mystudy.wiki.vault.ingestTargets
 import com.neojou.mystudy.wiki.vault.listMarkdownUnder
 import com.neojou.mystudy.wiki.vault.readCapped
 import com.neojou.mystudy.wiki.vault.scaffoldWiki
-import com.neojou.mystudy.wiki.vault.stageIntoRaw
+import com.neojou.mystudy.wiki.vault.linkIntoRawSource
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -90,6 +89,8 @@ class StudyController(
     var openNote by mutableStateOf("")
         private set
 
+    var previewPath by mutableStateOf<Path?>(null)
+        private set
     var previewTitle by mutableStateOf("")
         private set
     var previewBody by mutableStateOf("")
@@ -128,8 +129,6 @@ class StudyController(
 
     var proposal by mutableStateOf<DraftProposal?>(null)
         private set
-    var stagePaths by mutableStateOf<List<String>>(emptyList())
-        private set
 
     var pendingMode by mutableStateOf<StudyMode?>(null)
         private set
@@ -158,10 +157,6 @@ class StudyController(
 
     fun dismissChoices() {
         rootChoices = emptyList()
-    }
-
-    fun dismissStage() {
-        stagePaths = emptyList()
     }
 
     fun dismissProposal() {
@@ -303,69 +298,56 @@ class StudyController(
     }
 
     fun previewFile(path: Path) {
+        previewPath = path
         previewTitle = path.fileName?.toString() ?: path.toString()
+        claims = emptyList()
+        ingestMessage = ""
+        pendingMode = StudyMode.Home
         scope.launch {
             previewBody = withContext(Dispatchers.IO) { readPreview(path) }
         }
     }
 
-    fun requestIngest(path: Path) {
+    fun canIngestPreview(): Boolean {
+        val path = previewPath ?: return false
+        val vault = Path.of(settings.vaultPath)
+        val root = wikiRoot?.let(Path::of)
+        return previewOffersIngest(path, root, vault)
+    }
+
+    fun ingestPreview() {
+        val path = previewPath ?: return
         val root = wikiRoot
         if (root == null) {
-            error = "Create a wiki root before ingest."
-            showCreate = settings.vaultPath.let { Path.of(it).isDirectory() }
+            ingestMessage = "Create a wiki root before ingest."
+            showCreate = Path.of(settings.vaultPath).isDirectory()
             return
         }
         val targets = ingestTargets(path, Path.of(root), Path.of(settings.vaultPath))
-        when {
-            targets.isEmpty() -> error = "No markdown file outside the wiki to ingest."
-            targets.size > MAX_DIRECTORY_INGEST -> {
-                error = "That folder has ${targets.size} notes. Choose a smaller folder."
-            }
-            else -> stagePaths = targets.map { it.toString() }
-        }
-    }
-
-    fun confirmStage() {
-        val paths = stagePaths
-        if (paths.isEmpty()) return
-        stagePaths = emptyList()
-        val root = wikiRoot ?: return
-        scope.launch {
-            busy = true
-            try {
-                val staged = withContext(Dispatchers.IO) {
-                    paths.map { source -> stageIntoRaw(Path.of(root), Path.of(source)).relativePath }
-                }
-                queue = staged
-                rawFiles = withContext(Dispatchers.IO) { listMarkdownUnder(Path.of(root), "raw") }
-                treeTick += 1
-                selectRaw(staged.first())
-                pendingMode = StudyMode.Ingest
-                ingestMessage = "Copied into raw/. Original files were not changed."
-            } catch (caught: Exception) {
-                error = caught.message ?: "Could not copy into raw/."
-            } finally {
-                busy = false
-            }
-        }
-    }
-
-    fun copyPickedFile(absolute: String) {
-        val root = wikiRoot ?: run {
-            error = "Create a wiki root before copying into raw/."
+        if (targets.isEmpty()) {
+            ingestMessage = "This file is inside the wiki or is not markdown."
             return
         }
+        val source = targets.first()
         scope.launch {
             busy = true
+            ingestMessage = "Linking into raw/sources/…"
             try {
-                val staged = withContext(Dispatchers.IO) { stageIntoRaw(Path.of(root), Path.of(absolute)) }
+                val staged = withContext(Dispatchers.IO) {
+                    linkIntoRawSource(Path.of(root), source)
+                }
+                queue = listOf(staged.relativePath)
                 rawFiles = withContext(Dispatchers.IO) { listMarkdownUnder(Path.of(root), "raw") }
                 treeTick += 1
-                selectRaw(staged.relativePath)
-                ingestMessage = if (staged.copied) "Copied into raw/." else "Using the raw file that is already there."
+                selectedRaw = staged.relativePath
+                claims = emptyList()
+                ingestMessage = if (staged.created) {
+                    "Linked into ${staged.relativePath}."
+                } else {
+                    "Already linked at ${staged.relativePath}."
+                }
             } catch (caught: Exception) {
-                error = caught.message ?: "Could not copy into raw/."
+                ingestMessage = caught.message ?: "Ingest failed."
             } finally {
                 busy = false
             }
@@ -392,29 +374,34 @@ class StudyController(
             ingestMessage = "Choose a raw note."
             return
         }
-        val root = wikiRoot ?: return
+        if (wikiRoot == null) return
         scope.launch {
             busy = true
             try {
-                val text = withContext(Dispatchers.IO) {
-                    readCapped(Path.of(root).resolve(relative), PromptBudget.inputCharBudget(settings.ollamaNumCtx))
-                }
-                if (text.truncated) {
-                    ingestMessage = "This raw note is too big for one pass. Split it. Nothing was sent."
-                    return@launch
-                }
-                when (val result = withContext(Dispatchers.IO) { IngestPipeline(client()).extract(text.text, settings.ollamaNumCtx) }) {
-                    is ExtractResult.Ok -> {
-                        claims = result.claims.map { ClaimChoice(it, checked = true) }
-                        ingestMessage = "${result.claims.size} claims. Uncheck any you do not want."
-                    }
-                    is ExtractResult.Stopped -> ingestMessage = result.message
-                }
+                extractSelected(relative)
             } catch (caught: Exception) {
                 ingestMessage = caught.message ?: "Extract failed."
             } finally {
                 busy = false
             }
+        }
+    }
+
+    private suspend fun extractSelected(relative: String) {
+        val root = wikiRoot ?: return
+        val text = withContext(Dispatchers.IO) {
+            readCapped(Path.of(root).resolve(relative), PromptBudget.inputCharBudget(settings.ollamaNumCtx))
+        }
+        if (text.truncated) {
+            ingestMessage = "This raw note is too big for one pass. Split it. Nothing was sent."
+            return
+        }
+        when (val result = withContext(Dispatchers.IO) { IngestPipeline(client()).extract(text.text, settings.ollamaNumCtx) }) {
+            is ExtractResult.Ok -> {
+                claims = result.claims.map { ClaimChoice(it, checked = true) }
+                ingestMessage = "${result.claims.size} claims. Uncheck any you do not want."
+            }
+            is ExtractResult.Stopped -> ingestMessage = result.message
         }
     }
 

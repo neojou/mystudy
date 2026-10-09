@@ -1,6 +1,7 @@
 package com.neojou.mystudy.wiki.vault
 
 import java.nio.file.Files
+import java.nio.file.LinkOption
 import java.nio.file.Path
 import kotlin.io.path.isDirectory
 import kotlin.io.path.name
@@ -27,7 +28,16 @@ fun listVaultChildren(dir: Path, vault: Path): List<VaultChild> {
     return children.mapNotNull { child ->
         val name = child.name
         if (name.startsWith(".") || name in skippedNames) return@mapNotNull null
-        if (Files.isSymbolicLink(child)) return@mapNotNull null
+        if (Files.isSymbolicLink(child)) {
+            if (Files.isDirectory(child, LinkOption.NOFOLLOW_LINKS)) return@mapNotNull null
+            val real = try {
+                child.toRealPath()
+            } catch (_: Exception) {
+                return@mapNotNull null
+            }
+            if (!Files.isRegularFile(real) || !isInside(real, vault)) return@mapNotNull null
+            return@mapNotNull VaultChild(child, name, directory = false)
+        }
         if (!isInside(child, vault)) return@mapNotNull null
         val directory = child.isDirectory()
         if (!directory && !Files.isRegularFile(child)) return@mapNotNull null
@@ -38,18 +48,21 @@ fun listVaultChildren(dir: Path, vault: Path): List<VaultChild> {
 const val MAX_DIRECTORY_INGEST: Int = 100
 
 /**
- * Markdown files for a right-click Ingest.
- * Paths inside [wikiRoot] are excluded. The original files are not modified.
+ * Markdown files for preview Ingest.
+ * Paths under `{wikiRoot}/wiki/` and `{wikiRoot}/raw/` are excluded.
+ * Vault notes next to those folders remain eligible even when wiki root is the vault.
+ * The original files are not modified.
  */
 fun ingestTargets(clicked: Path, wikiRoot: Path, vault: Path): List<Path> {
     if (!isInside(clicked, vault)) return emptyList()
-    if (isInside(clicked, wikiRoot)) return emptyList()
+    if (isWikiManagedPath(wikiRoot, clicked)) return emptyList()
     if (Files.isSymbolicLink(clicked)) return emptyList()
     if (Files.isDirectory(clicked)) {
         val found = mutableListOf<Path>()
         fun recurse(dir: Path) {
             for (child in listVaultChildren(dir, vault)) {
-                if (isInside(child.path, wikiRoot)) continue
+                if (isWikiManagedPath(wikiRoot, child.path)) continue
+                if (Files.isSymbolicLink(child.path)) continue
                 if (child.directory) recurse(child.path)
                 else if (child.name.endsWith(".md", ignoreCase = true)) found.add(child.path)
             }
@@ -77,9 +90,14 @@ fun listMarkdownUnder(root: Path, relativeFolder: String): List<String> {
             return
         }
         for (child in children) {
-            if (Files.isSymbolicLink(child)) continue
             val name = child.name
             if (name.startsWith(".")) continue
+            if (Files.isSymbolicLink(child)) {
+                if (name.endsWith(".md", ignoreCase = true) && isRawSourceMarkdownLink(root, child)) {
+                    found += lexicalRelative(root, child)
+                }
+                continue
+            }
             if (!isInside(child, root)) continue
             if (child.isDirectory()) recurse(child)
             else if (name.endsWith(".md", ignoreCase = true)) {

@@ -1,7 +1,5 @@
 package com.neojou.mystudy.study
 
-import androidx.compose.foundation.ContextMenuArea
-import androidx.compose.foundation.ContextMenuItem
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
@@ -14,14 +12,15 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.neojou.mystudy.wiki.vault.isInside
+import com.neojou.mystudy.wiki.vault.ingestTargets
+import com.neojou.mystudy.wiki.vault.isWikiManagedPath
 import com.neojou.mystudy.wiki.vault.listVaultChildren
 import java.nio.file.Path
 import kotlin.io.path.isDirectory
@@ -32,7 +31,9 @@ import kotlin.io.path.name
  *
  * Every row, including the vault root, shows only the last path segment
  * (for example `第二大腦`), never the absolute path. The full path stays in Settings.
- * Wiki files are tinted. Ingest is offered only outside the wiki root.
+ * Rows under `{wikiRoot}/wiki/` and `{wikiRoot}/raw/` are tinted.
+ * The ` · wiki` mark sits on the `wiki/` folder, not on the vault root.
+ * Clicking a file opens it on the right; Ingest is a button there.
  */
 @Composable
 fun FileTreePane(
@@ -64,12 +65,12 @@ fun FileTreePane(
             depth = 0,
             expanded = expanded,
             tick = controller.treeTick,
+            selected = controller.previewPath,
             onToggle = { target ->
                 val key = target.toString()
                 expanded = if (key in expanded) expanded - key else expanded + key
             },
             onOpen = controller::previewFile,
-            onIngest = controller::requestIngest,
         )
     }
 }
@@ -82,45 +83,40 @@ private fun VaultNode(
     depth: Int,
     expanded: Set<String>,
     tick: Int,
+    selected: Path?,
     onToggle: (Path) -> Unit,
     onOpen: (Path) -> Unit,
-    onIngest: (Path) -> Unit,
 ) {
     val directory = path.isDirectory()
     val open = path.toString() in expanded
-    val inWiki = wikiRoot != null && isInside(path, wikiRoot)
-    val wikiHere = wikiRoot != null && samePath(path, wikiRoot)
+    val inWiki = wikiRoot != null && isWikiManagedPath(wikiRoot, path)
+    val wikiHere = wikiRoot != null && samePath(path, wikiRoot.resolve("wiki"))
+    val chosen = selected != null && samePath(path, selected)
     val label = buildString {
         if (directory) append(if (open) "▾ " else "▸ ")
         append(vaultTreeLabel(path))
         if (wikiHere) append("  · wiki")
     }
-    val rowModifier = Modifier
-        .fillMaxWidth()
-        .padding(start = (depth * 12).dp, top = 2.dp, bottom = 2.dp)
-        .clickable {
-            if (directory) onToggle(path) else onOpen(path)
-        }
-    val color = if (inWiki) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
-    val row: @Composable () -> Unit = {
-        Row(rowModifier) {
-            Text(
-                text = label,
-                color = color,
-                style = MaterialTheme.typography.bodySmall,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
+    val color = when {
+        chosen -> MaterialTheme.colorScheme.primary
+        inWiki -> MaterialTheme.colorScheme.primary
+        else -> MaterialTheme.colorScheme.onSurface
     }
-    if (!inWiki) {
-        ContextMenuArea(
-            items = { listOf(ContextMenuItem("Ingest") { onIngest(path) }) },
-        ) {
-            row()
-        }
-    } else {
-        row()
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(start = (depth * 12).dp, top = 2.dp, bottom = 2.dp)
+            .clickable {
+                if (directory) onToggle(path) else onOpen(path)
+            },
+    ) {
+        Text(
+            text = label,
+            color = color,
+            style = MaterialTheme.typography.bodySmall,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
     val children = remember(path.toString(), tick, directory) {
         if (directory) listVaultChildren(path, vault) else emptyList()
@@ -134,9 +130,9 @@ private fun VaultNode(
                 depth = depth + 1,
                 expanded = expanded,
                 tick = tick,
+                selected = selected,
                 onToggle = onToggle,
                 onOpen = onOpen,
-                onIngest = onIngest,
             )
         }
     }
@@ -144,6 +140,13 @@ private fun VaultNode(
 
 /** Last path segment shown in the file browser. A nameless root falls back to the whole path. */
 internal fun vaultTreeLabel(path: Path): String = path.name.ifEmpty { path.toString() }
+
+/** True when the open preview file can be ingested (markdown outside `wiki/` and `raw/`). */
+internal fun previewOffersIngest(path: Path, wikiRoot: Path?, vault: Path): Boolean {
+    if (path.isDirectory()) return false
+    if (wikiRoot == null) return path.name.endsWith(".md", ignoreCase = true)
+    return ingestTargets(path, wikiRoot, vault).isNotEmpty()
+}
 
 private fun samePath(left: Path, right: Path): Boolean = try {
     left.toRealPath() == right.toRealPath()

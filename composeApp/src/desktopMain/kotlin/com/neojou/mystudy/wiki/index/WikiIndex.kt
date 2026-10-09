@@ -6,6 +6,8 @@ import com.neojou.mystudy.wiki.markdown.parseNote
 import com.neojou.mystudy.wiki.model.Resolution
 import com.neojou.mystudy.wiki.vault.canonical
 import com.neojou.mystudy.wiki.vault.isInside
+import com.neojou.mystudy.wiki.vault.isRawSourceMarkdownLink
+import com.neojou.mystudy.wiki.vault.lexicalRelative
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonPrimitive
@@ -78,7 +80,7 @@ class WikiIndex private constructor(
             reloadMaps()
             return
         }
-        if (!isInside(file, wikiRoot)) return
+        if (!isInside(file, wikiRoot) && !isRawSourceMarkdownLink(wikiRoot, file)) return
         refreshFile(file, relative)
         reloadMaps()
     }
@@ -615,9 +617,14 @@ private fun walkMarkdown(root: Path, visitor: (Path, String) -> Unit) {
             return
         }
         for (child in children) {
-            if (Files.isSymbolicLink(child)) continue
             val name = child.name
             if (name.startsWith(".")) continue
+            if (Files.isSymbolicLink(child)) {
+                if (name.endsWith(".md", ignoreCase = true) && isRawSourceMarkdownLink(root, child)) {
+                    visitor(child, lexicalRelative(root, child))
+                }
+                continue
+            }
             if (!isInside(child, root)) continue
             when {
                 child.isDirectory() -> recurse(child)

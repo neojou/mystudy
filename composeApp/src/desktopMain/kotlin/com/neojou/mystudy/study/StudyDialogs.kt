@@ -35,7 +35,7 @@ fun CreateWikiDialog(onConfirm: () -> Unit, onDismiss: () -> Unit) {
         title = { Text("Create wiki root") },
         text = {
             Text(
-                "No wiki root was found. Creating one adds llm-wiki/ inside the vault, with raw/ and wiki/index.md, plus log.md, schema.md, and the sources, concepts, entities, and queries folders. Existing notes stay where they are.",
+                "No wiki root was found. Creating one adds llm-wiki/ inside the vault, with raw/sources/ and wiki/index.md, plus log.md, schema.md, and the sources, concepts, entities, and queries folders. Existing notes stay where they are.",
             )
         },
         confirmButton = { TextButton(onClick = onConfirm) { Text("Create") } },
@@ -65,19 +65,6 @@ fun RootChoiceDialog(
             }
         }
     }
-}
-
-@Composable
-fun StageDialog(count: Int, onConfirm: () -> Unit, onDismiss: () -> Unit) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Copy into raw") },
-        text = {
-            Text("Copy $count markdown files into raw/ and ingest them one at a time. Originals stay put.")
-        },
-        confirmButton = { TextButton(onClick = onConfirm) { Text("Copy") } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
-    )
 }
 
 @Composable

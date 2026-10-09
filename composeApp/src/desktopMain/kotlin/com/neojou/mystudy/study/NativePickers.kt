@@ -9,9 +9,6 @@ import java.io.File
  */
 fun pickVaultFolder(): String? = pick(directory = true, title = "Choose vault folder")
 
-/** File picker used to copy one note into raw/. The original is not moved. */
-fun pickMarkdownFile(): String? = pick(directory = false, title = "Copy into raw")
-
 private fun pick(directory: Boolean, title: String): String? {
     val key = "apple.awt.fileDialogForDirectories"
     val previous = System.getProperty(key)

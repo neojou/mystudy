@@ -13,7 +13,7 @@ fun scaffoldWiki(vault: Path): Path {
     if (!vault.isDirectory()) error("Vault folder does not exist.")
     val root = vault.resolve("llm-wiki")
     if (root.exists() && !root.isDirectory()) error("llm-wiki exists and is not a folder.")
-    Files.createDirectories(root.resolve("raw"))
+    Files.createDirectories(root.resolve("raw").resolve("sources"))
     Files.createDirectories(root.resolve("wiki").resolve("sources"))
     Files.createDirectories(root.resolve("wiki").resolve("concepts"))
     Files.createDirectories(root.resolve("wiki").resolve("entities"))
@@ -27,7 +27,7 @@ fun scaffoldWiki(vault: Path): Path {
 fun plannedScaffoldLines(vault: Path): List<String> {
     val root = vault.resolve("llm-wiki")
     return listOf(
-        root.resolve("raw").toString() + "/",
+        root.resolve("raw").resolve("sources").toString() + "/",
         root.resolve("wiki").resolve("index.md").toString(),
         root.resolve("wiki").resolve("log.md").toString(),
         root.resolve("wiki").resolve("schema.md").toString(),
@@ -67,7 +67,7 @@ Pages are Markdown, YAML frontmatter, and [[wikilinks]] only.
 
 ## Directories
 
-- `raw/` is immutable source material. After a file is stored there, do not edit it, move it, or overwrite it.
+- `raw/sources/` holds symbolic links to vault notes. Do not overwrite those links. Edit the original file in the vault.
 - `wiki/index.md` is the catalog. Each entry has a wikilink, a one-line summary, a type, and sources.
 - `wiki/log.md` is append-only. New entries use `## [YYYY-MM-DD] ingest | title`, `query`, or `lint`.
 - `wiki/schema.md` is this file. Do not replace it to match a different tool.

@@ -24,17 +24,18 @@ fun assertWikiWrite(root: Path, relative: String): Path {
 }
 
 /**
- * A new file under `raw/`. The destination must not already exist.
+ * A new symbolic link under `raw/sources/`. The destination must not already exist.
  */
 fun assertNewRawFile(root: Path, relative: String): Path {
-    if (!relative.startsWith("raw/") || relative.endsWith("/")) error("Blocked raw path: $relative")
+    if (!relative.startsWith("raw/sources/") || relative.endsWith("/")) error("Blocked raw path: $relative")
+    val rest = relative.removePrefix("raw/sources/")
+    if (rest.isBlank() || rest.contains('/') || rest.contains('\\')) error("Blocked raw path: $relative")
     val target = resolveInside(root, relative) ?: error("Blocked raw path: $relative")
-    val rawRoot = canonical(root).resolve("raw")
+    val sourceDir = canonical(root).resolve("raw").resolve("sources")
     val parent = target.parent ?: error("Blocked raw path: $relative")
-    if (!isInside(parent, rawRoot)) error("Blocked raw path: $relative")
+    if (!isInside(parent, sourceDir) && canonical(parent) != sourceDir) error("Blocked raw path: $relative")
     if (!parent.isDirectory()) error("Raw folder is missing: $relative")
-    if (target.exists()) error("Refusing to overwrite raw file: $relative")
-    if (Files.isSymbolicLink(target)) error("Blocked raw path: $relative")
+    if (target.exists() || Files.isSymbolicLink(target)) error("Refusing to overwrite raw file: $relative")
     return target
 }
 

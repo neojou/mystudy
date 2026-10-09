@@ -13,6 +13,23 @@ fun canonical(path: Path): Path = try {
 }
 
 /**
+ * True when [child] sits under [parent] without following symbolic links.
+ * Use this for UI and for `raw/sources/` links whose real file is outside the wiki root.
+ */
+fun lexicallyInside(child: Path, parent: Path): Boolean {
+    val childPath = child.toAbsolutePath().normalize()
+    val parentPath = parent.toAbsolutePath().normalize()
+    return childPath == parentPath || childPath.startsWith(parentPath)
+}
+
+fun lexicalRelative(root: Path, child: Path): String {
+    return root.toAbsolutePath().normalize()
+        .relativize(child.toAbsolutePath().normalize())
+        .toString()
+        .replace('\\', '/')
+}
+
+/**
  * True when [child] is [parent] or a file inside it. Comparison uses real paths.
  */
 fun isInside(child: Path, parent: Path): Boolean {
@@ -26,6 +43,17 @@ fun isWikiRoot(dir: Path): Boolean {
     val raw = dir.resolve("raw")
     val index = dir.resolve("wiki").resolve("index.md")
     return raw.isDirectory() && index.isRegularFile()
+}
+
+/**
+ * Wiki pages live in `{wikiRoot}/wiki/`; staged sources live in `{wikiRoot}/raw/`.
+ * Vault notes next to those folders (for example `Zettelkasten/`) are not managed.
+ * Uses lexical paths so `raw/sources/` links stay managed even when the real file is outside.
+ */
+fun isWikiManagedPath(wikiRoot: Path, path: Path): Boolean {
+    val pages = wikiRoot.resolve("wiki")
+    val raw = wikiRoot.resolve("raw")
+    return lexicallyInside(path, pages) || lexicallyInside(path, raw)
 }
 
 fun relativeToRoot(root: Path, child: Path): String? {

@@ -4,6 +4,7 @@ import com.neojou.mystudy.study.GraphHit
 import com.neojou.mystudy.study.MarkdownBlock
 import com.neojou.mystudy.study.circleLayout
 import com.neojou.mystudy.study.hitGraph
+import com.neojou.mystudy.study.previewOffersIngest
 import com.neojou.mystudy.study.vaultTreeLabel
 import com.neojou.mystudy.study.inlineMarkdown
 import com.neojou.mystudy.study.markdownBlocks
@@ -42,8 +43,9 @@ import com.neojou.mystudy.wiki.vault.assertNewRawFile
 import com.neojou.mystudy.wiki.vault.assertWikiWrite
 import com.neojou.mystudy.wiki.vault.discoverWikiRoot
 import com.neojou.mystudy.wiki.vault.ingestTargets
+import com.neojou.mystudy.wiki.vault.listMarkdownUnder
+import com.neojou.mystudy.wiki.vault.linkIntoRawSource
 import com.neojou.mystudy.wiki.vault.scaffoldWiki
-import com.neojou.mystudy.wiki.vault.stageIntoRaw
 import com.neojou.mystudy.wiki.vault.Discovery
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
@@ -71,6 +73,20 @@ class WikiBehaviorTest {
         assertEquals("第二大腦", vaultTreeLabel(Path.of("/Users/neojou/Knowledge/第二大腦")))
         assertEquals("raw", vaultTreeLabel(Path.of("/Users/neojou/Knowledge/第二大腦/raw")))
         assertEquals("/", vaultTreeLabel(Path.of("/")))
+    }
+
+    @Test
+    fun previewOffersIngestOutsideTheWikiRoot() {
+        val vault = tempDir()
+        val wiki = scaffoldWiki(vault)
+        val inbox = vault.resolve("Zettelkasten").resolve("Inbox").resolve("卡片盒筆記法.md")
+        Files.createDirectories(inbox.parent)
+        inbox.writeText("note")
+        assertTrue(previewOffersIngest(inbox, wiki, vault))
+        assertTrue(previewOffersIngest(inbox, null, vault))
+        assertFalse(previewOffersIngest(wiki.resolve("wiki").resolve("concepts").resolve("a.md"), wiki, vault))
+        assertFalse(previewOffersIngest(wiki.resolve("raw").resolve("sources").resolve("a.md"), wiki, vault))
+        assertFalse(previewOffersIngest(inbox.parent, wiki, vault))
     }
 
     @Test
@@ -120,6 +136,7 @@ class WikiBehaviorTest {
         assertEquals("custom schema\n", schema.readText())
         assertEquals("leave me\n", keep.readText())
         assertTrue(root.resolve("raw").toFile().isDirectory)
+        assertTrue(root.resolve("raw").resolve("sources").toFile().isDirectory)
         assertTrue(root.resolve("wiki").resolve("index.md").toFile().isFile)
     }
 
@@ -129,32 +146,48 @@ class WikiBehaviorTest {
         assertFails { assertWikiWrite(root, "wiki/schema.md") }
         assertFails { assertWikiWrite(root, "../outside.md") }
         assertFails { assertWikiWrite(root, "raw/note.md") }
-        val raw = root.resolve("raw").resolve("note.md")
-        raw.writeText("kept\n")
         assertFails { assertNewRawFile(root, "raw/note.md") }
+        val raw = root.resolve("raw").resolve("sources").resolve("note.md")
+        raw.writeText("kept\n")
+        assertFails { assertNewRawFile(root, "raw/sources/note.md") }
         assertEquals("kept\n", raw.readText())
     }
 
     @Test
-    fun stagingCopiesWithoutOverwritingRawOrTheOriginal() {
+    fun stagingLinksWithoutCopyingOrOverwritingTheOriginal() {
         val vault = tempDir()
         val root = scaffoldWiki(vault)
         val first = vault.resolve("note.md")
         first.writeText("one")
-        val staged = stageIntoRaw(root, first)
+        val staged = linkIntoRawSource(root, first)
+        assertEquals("raw/sources/note.md", staged.relativePath)
+        assertTrue(staged.created)
+        val linked = root.resolve(staged.relativePath)
+        assertTrue(Files.isSymbolicLink(linked))
         assertEquals("one", first.readText())
-        assertEquals("one", root.resolve(staged.relativePath).readText())
+        assertEquals("one", linked.readText())
         val secondDir = vault.resolve("elsewhere")
         Files.createDirectories(secondDir)
         val second = secondDir.resolve("note.md")
         second.writeText("two")
-        val again = stageIntoRaw(root, second)
-        assertEquals("one", root.resolve("raw").resolve("note.md").readText())
+        val again = linkIntoRawSource(root, second)
+        assertEquals("one", root.resolve("raw").resolve("sources").resolve("note.md").readText())
         assertEquals("two", root.resolve(again.relativePath).readText())
+        assertTrue(Files.isSymbolicLink(root.resolve(again.relativePath)))
         assertFalse(staged.relativePath == again.relativePath)
-        val same = stageIntoRaw(root, first)
+        val same = linkIntoRawSource(root, first)
         assertEquals(staged.relativePath, same.relativePath)
-        assertEquals(listOf("note (2).md", "note.md"), root.resolve("raw").toFile().list()?.sorted())
+        assertFalse(same.created)
+        assertEquals(
+            listOf("note (2).md", "note.md"),
+            root.resolve("raw").resolve("sources").toFile().list()?.sorted(),
+        )
+        assertEquals(listOf("raw/sources/note (2).md", "raw/sources/note.md"), listMarkdownUnder(root, "raw"))
+        WikiIndex.open(root, tempDir().resolve("link.sqlite")).use { index ->
+            index.reconcileAll()
+            assertNotNull(index.load("raw/sources/note.md"))
+            assertNotNull(index.load("raw/sources/note (2).md"))
+        }
     }
 
     @Test
@@ -170,6 +203,37 @@ class WikiBehaviorTest {
         assertEquals(listOf(note.toRealPath()), ingestTargets(note, wiki, vault).map { it.toRealPath() })
         assertTrue(ingestTargets(inside, wiki, vault).isEmpty())
         assertEquals(listOf(note.toRealPath()), ingestTargets(vault, wiki, vault).map { it.toRealPath() })
+    }
+
+    @Test
+    fun vaultAsWikiRootLeavesInboxIngestible() {
+        val vault = vaultAsWikiRoot()
+        val inbox = vault.resolve("Zettelkasten").resolve("Inbox").resolve("卡片盒筆記法.md")
+        Files.createDirectories(inbox.parent)
+        inbox.writeText("zettel")
+        val concept = vault.resolve("wiki").resolve("concepts").resolve("secret.md")
+        concept.writeText("secret")
+        val rawNote = vault.resolve("raw").resolve("sources").resolve("copied.md")
+        rawNote.writeText("copied")
+        assertTrue(previewOffersIngest(inbox, vault, vault))
+        assertFalse(previewOffersIngest(concept, vault, vault))
+        assertFalse(previewOffersIngest(rawNote, vault, vault))
+        assertEquals(listOf(inbox.toRealPath()), ingestTargets(inbox, vault, vault).map { it.toRealPath() })
+        val fromRoot = ingestTargets(vault, vault, vault).map { it.toRealPath() }
+        assertTrue(inbox.toRealPath() in fromRoot)
+        assertFalse(concept.toRealPath() in fromRoot)
+        assertFalse(rawNote.toRealPath() in fromRoot)
+        val staged = linkIntoRawSource(vault, inbox)
+        assertEquals("raw/sources/卡片盒筆記法.md", staged.relativePath)
+        val linked = vault.resolve(staged.relativePath)
+        assertTrue(Files.isSymbolicLink(linked))
+        assertEquals("zettel", inbox.readText())
+        assertEquals("zettel", linked.readText())
+        assertEquals(
+            Path.of("../../Zettelkasten/Inbox/卡片盒筆記法.md"),
+            Files.readSymbolicLink(linked),
+        )
+        assertFails { linkIntoRawSource(vault, concept) }
     }
 
     @Test
@@ -605,6 +669,15 @@ class WikiBehaviorTest {
 }
 
 private fun tempDir(): Path = Files.createTempDirectory("mystudy-wiki")
+
+/** Vault itself is the wiki root: `raw/` and `wiki/index.md` sit next to notes such as Zettelkasten. */
+private fun vaultAsWikiRoot(): Path {
+    val vault = tempDir()
+    Files.createDirectories(vault.resolve("raw").resolve("sources"))
+    Files.createDirectories(vault.resolve("wiki").resolve("concepts"))
+    vault.resolve("wiki").resolve("index.md").writeText("# Index\n")
+    return vault
+}
 
 private fun writeConcept(root: Path, name: String, title: String, aliases: List<String>) {
     root.resolve("wiki").resolve("concepts").resolve(name).writeText(conceptText(title, aliases))

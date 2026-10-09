@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
@@ -38,33 +39,74 @@ import kotlin.io.path.isDirectory
 
 @Composable
 fun HomePane(controller: StudyController, modifier: Modifier = Modifier) {
-    Column(
-        modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(24.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
+    val preview = controller.previewPath
+    if (preview == null) {
+        Column(
+            modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text(
+                text = AppVersion.APP_NAME,
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Medium,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth().padding(top = 48.dp),
+            )
+            Text(controller.status, style = MaterialTheme.typography.bodyMedium, textAlign = TextAlign.Center)
+            Text("${controller.noteCount} notes", style = MaterialTheme.typography.bodySmall)
+            if (controller.wikiRoot == null && Path.of(controller.settings.vaultPath).isDirectory()) {
+                TextButton(onClick = controller::offerCreate) { Text("Create wiki root") }
+            }
+        }
+        return
+    }
+    Column(modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Button(
+                onClick = controller::ingestPreview,
+                enabled = !controller.busy && controller.canIngestPreview(),
+            ) { Text("Ingest") }
+            Text(
+                text = controller.previewTitle,
+                style = MaterialTheme.typography.titleMedium,
+                maxLines = 1,
+                modifier = Modifier.weight(1f),
+            )
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (controller.busy) {
+                CircularProgressIndicator(Modifier.size(16.dp))
+            }
+            Text(
+                text = controller.ingestMessage.ifBlank {
+                    if (controller.canIngestPreview()) {
+                        "Ingest links this note into raw/sources/."
+                    } else {
+                        "This file cannot be ingested."
+                    }
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f),
+            )
+        }
         Text(
-            text = AppVersion.APP_NAME,
-            style = MaterialTheme.typography.titleLarge,
-            fontWeight = FontWeight.Medium,
-            textAlign = TextAlign.Center,
-            modifier = Modifier.fillMaxWidth().padding(top = 48.dp),
+            controller.previewBody,
+            style = MaterialTheme.typography.bodyMedium,
+            modifier = Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()),
         )
-        Text(controller.status, style = MaterialTheme.typography.bodyMedium, textAlign = TextAlign.Center)
-        Text("${controller.noteCount} notes", style = MaterialTheme.typography.bodySmall)
-        if (controller.wikiRoot == null && Path.of(controller.settings.vaultPath).isDirectory()) {
-            TextButton(onClick = controller::offerCreate) { Text("Create wiki root") }
-        }
-        if (controller.busy) {
-            CircularProgressIndicator()
-        }
-        if (controller.previewBody.isNotBlank()) {
-            Text(controller.previewTitle, style = MaterialTheme.typography.titleMedium, modifier = Modifier.fillMaxWidth())
-            Text(controller.previewBody, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.fillMaxWidth())
-        }
     }
 }
 
@@ -117,13 +159,6 @@ fun IngestPane(controller: StudyController, modifier: Modifier = Modifier) {
     Column(modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
             Button(
-                onClick = {
-                    val picked = pickMarkdownFile() ?: return@Button
-                    controller.copyPickedFile(picked)
-                },
-                enabled = ready && !controller.busy,
-            ) { Text("Copy into raw") }
-            Button(
                 onClick = controller::extractClaims,
                 enabled = ready && !controller.busy && controller.selectedRaw != null,
             ) { Text("Extract") }
@@ -146,7 +181,7 @@ fun IngestPane(controller: StudyController, modifier: Modifier = Modifier) {
         }
         Row(Modifier.weight(1f).fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             Column(Modifier.weight(0.35f).fillMaxHeight().verticalScroll(rememberScrollState())) {
-                Text("raw/", style = MaterialTheme.typography.titleSmall)
+                Text("raw/sources/", style = MaterialTheme.typography.titleSmall)
                 controller.rawFiles.forEach { relative ->
                     val selected = relative == controller.selectedRaw
                     Text(
