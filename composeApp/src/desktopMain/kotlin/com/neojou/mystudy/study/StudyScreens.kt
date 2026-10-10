@@ -1,7 +1,9 @@
 package com.neojou.mystudy.study
 
+import androidx.compose.foundation.VerticalScrollbar
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -10,12 +12,15 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.rememberScrollbarAdapter
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -29,9 +34,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Window
+import androidx.compose.ui.window.rememberWindowState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import com.neojou.mystudy.AppTheme
 import com.neojou.mystudy.AppVersion
 import com.neojou.mystudy.wiki.index.NoteSummary
 import java.nio.file.Path
@@ -234,6 +243,10 @@ fun AskPane(controller: StudyController, modifier: Modifier = Modifier) {
                 onClick = controller::fileAnswer,
                 enabled = !controller.busy && controller.answer.isNotBlank(),
             ) { Text("File this answer") }
+            TextButton(
+                onClick = controller::showAskGraph,
+                enabled = controller.askPages.isNotEmpty(),
+            ) { Text("Knowledge graph") }
         }
         if (controller.askMessage.isNotBlank()) {
             Text(controller.askMessage)
@@ -241,33 +254,63 @@ fun AskPane(controller: StudyController, modifier: Modifier = Modifier) {
         if (controller.askReported) {
             Text("tokenHits=${controller.tokenHits}  graphHits=${controller.graphHits}")
         }
-        Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
+        CopyableScroll(Modifier.weight(1f).fillMaxWidth()) {
             if (controller.answer.isNotBlank()) {
                 MarkdownText(controller.answer)
             }
-            if (controller.askPages.isNotEmpty()) {
-                Text("Citations", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 8.dp))
-                controller.askPages.forEach { page ->
-                    Text(
-                        text = "[${page.number}] ${page.title} — ${page.path}",
-                        color = MaterialTheme.colorScheme.primary,
-                        style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { controller.openIndexed(page.path) }
-                            .padding(vertical = 2.dp),
+        }
+        if (controller.askPages.isNotEmpty()) {
+            Text("Citations", style = MaterialTheme.typography.titleSmall)
+            controller.askPages.forEach { page ->
+                Text(
+                    text = "[${page.number}] ${page.title} — ${page.path}",
+                    color = MaterialTheme.colorScheme.primary,
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { controller.openAskPage(page.path) }
+                        .padding(vertical = 2.dp),
+                )
+            }
+        }
+    }
+    if (controller.askGraphOpen && controller.askPages.isNotEmpty()) {
+        Window(
+            onCloseRequest = controller::closeAskGraph,
+            title = "Knowledge graph",
+            state = rememberWindowState(size = DpSize(720.dp, 560.dp)),
+        ) {
+            AppTheme {
+                Surface(Modifier.fillMaxSize()) {
+                    AnswerGraph(
+                        pages = controller.askPages,
+                        edges = controller.askEdges,
+                        onOpen = controller::openAskPage,
+                        modifier = Modifier.fillMaxSize().padding(16.dp),
                     )
                 }
             }
-            AnswerGraph(
-                pages = controller.askPages,
-                edges = controller.askEdges,
-                onOpen = controller::openIndexed,
-            )
-            val opened = controller.askPages.firstOrNull { it.path == controller.previewTitle }
-            if (opened != null && controller.openNote.isNotBlank()) {
-                Text(opened.path, style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 8.dp))
-                Text(controller.openNote, style = MaterialTheme.typography.bodyMedium)
+        }
+    }
+    val readerPath = controller.askReaderPath
+    if (readerPath != null) {
+        Window(
+            onCloseRequest = controller::closeAskReader,
+            title = controller.askReaderTitle.ifBlank { readerPath },
+            state = rememberWindowState(size = DpSize(720.dp, 640.dp)),
+        ) {
+            AppTheme {
+                Surface(Modifier.fillMaxSize()) {
+                    Column(
+                        Modifier.fillMaxSize().padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Text(readerPath, style = MaterialTheme.typography.titleSmall)
+                        CopyableScroll(Modifier.weight(1f).fillMaxWidth()) {
+                            Text(controller.askReaderBody, style = MaterialTheme.typography.bodyMedium)
+                        }
+                    }
+                }
             }
         }
     }
@@ -331,6 +374,30 @@ fun SettingsPane(controller: StudyController, modifier: Modifier = Modifier) {
         }
         Text(controller.status, style = MaterialTheme.typography.bodySmall)
         Text("Wiki root: ${controller.wikiRoot ?: "none"}", style = MaterialTheme.typography.bodySmall)
+    }
+}
+
+@Composable
+private fun CopyableScroll(
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit,
+) {
+    val scroll = rememberScrollState()
+    Box(modifier) {
+        SelectionContainer(Modifier.fillMaxSize()) {
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(scroll)
+                    .padding(end = 16.dp),
+            ) {
+                content()
+            }
+        }
+        VerticalScrollbar(
+            adapter = rememberScrollbarAdapter(scroll),
+            modifier = Modifier.align(Alignment.CenterEnd).fillMaxHeight(),
+        )
     }
 }
 

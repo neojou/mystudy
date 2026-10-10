@@ -126,6 +126,14 @@ class StudyController(
         private set
     var askMessage by mutableStateOf("")
         private set
+    var askGraphOpen by mutableStateOf(false)
+        private set
+    var askReaderPath by mutableStateOf<String?>(null)
+        private set
+    var askReaderTitle by mutableStateOf("")
+        private set
+    var askReaderBody by mutableStateOf("")
+        private set
 
     var proposal by mutableStateOf<DraftProposal?>(null)
         private set
@@ -297,6 +305,30 @@ class StudyController(
         }
     }
 
+    fun showAskGraph() {
+        if (askPages.isNotEmpty()) askGraphOpen = true
+    }
+
+    fun closeAskGraph() {
+        askGraphOpen = false
+    }
+
+    fun closeAskReader() {
+        askReaderPath = null
+        askReaderTitle = ""
+        askReaderBody = ""
+    }
+
+    fun openAskPage(path: String) {
+        val page = askPages.firstOrNull { it.path == path }
+        askReaderPath = path
+        askReaderTitle = page?.title?.ifBlank { path } ?: path
+        scope.launch {
+            val body = withContext(dbDispatcher) { index?.load(path)?.body.orEmpty() }
+            if (askReaderPath == path) askReaderBody = body
+        }
+    }
+
     fun previewFile(path: Path) {
         previewPath = path
         previewTitle = path.fileName?.toString() ?: path.toString()
@@ -440,6 +472,8 @@ class StudyController(
             graphHits = 0
             askMessage = ""
             askReported = false
+            askGraphOpen = false
+            closeAskReader()
             try {
                 val result = withContext(dbDispatcher) {
                     val current = index ?: return@withContext AskResult.NotCalled("Index is not open.")
@@ -465,6 +499,7 @@ class StudyController(
                         graphHits = result.graphHits
                         askMessage = ""
                         askReported = true
+                        askGraphOpen = result.pages.isNotEmpty()
                     }
                 }
             } catch (caught: Exception) {
@@ -474,6 +509,7 @@ class StudyController(
                 tokenHits = 0
                 graphHits = 0
                 askReported = true
+                askGraphOpen = false
             } finally {
                 busy = false
             }

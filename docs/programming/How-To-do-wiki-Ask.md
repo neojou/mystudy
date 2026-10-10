@@ -230,7 +230,13 @@ Ask packet 另外用 `PACKET_PAGES`、`PACKET_CHARS`、`SCHEMA_EXCERPT` 先把�
 | `NotCalled` | context 太小、prompt 超預算、Ollama 失敗、索引未開 | 顯示該訊息，沒有答案 |
 | `Answer` | 模型回了文字 | Markdown 答案、引用列表、答案圖 |
 
-`AskPane` 在回報後顯示 `tokenHits=…  graphHits=…`。引用列是 `[n] title — path`，點了呼叫 `openIndexed`。`AnswerGraph` 把 packet 裡最多 8 頁排成圓，邊是 packet 內 wikilink。這張圖不是整個 vault 的圖。
+`AskPane` 在回報後顯示 `tokenHits=…  graphHits=…`。
+
+答案在自己的區塊裡，用 `SelectionContainer` 包住 `MarkdownText`。選取後用系統複製快捷鍵，文字進作業系統剪貼簿，可以貼到其他 app。複製的是畫面上的字，不含 `**` 這類標記。這個區塊右邊有 `VerticalScrollbar`，只捲答案，不連引用一起捲。
+
+引用列是 `[n] title — path`。點了呼叫 `openAskPage`，用一扇新視窗顯示該頁索引裡的 body。再點另一頁會換成同一扇視窗的標題與正文，不疊多扇。正文同樣可以選取複製，右邊有捲軸。這不走 `openIndexed`，所以不會改到 Home 或 Browse 的預覽。
+
+答案帶有頁面時自動打開標題為 `Knowledge graph` 的視窗。關掉只關這扇視窗。`Knowledge graph` 按鈕可再打開。沒有頁面時視窗關掉。視窗裡的 `AnswerGraph` 把 packet 裡最多 8 頁排成圓，邊是 packet 內 wikilink。點節點打開頁面視窗，點邊在圖視窗裡顯示那一行 wikilink。這張圖不是整個 vault 的圖。新問一次會先關掉這兩扇視窗；新答案仍有頁面時，圖視窗再打開。
 
 ## 把答案存成 query 頁
 
