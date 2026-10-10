@@ -76,10 +76,11 @@ class AskPipeline(
         if (analysis.phrase.isBlank() && analysis.bigrams.isEmpty() && analysis.extras.isEmpty()) {
             return AskResult.NoMatch("Nothing in the wiki matches.", 0, 0)
         }
-        val (tokenHits, pool) = lexicalPool(index, analysis)
+        val anchors = contentAnchors(analysis.pieces) { index.countAskTerm(it) > 0 }
+        val (tokenHits, pool) = lexicalPool(index, analysis, anchors)
         val frequency = documentFrequency(index, analysis.bigrams + analysis.extras)
         val noteCount = index.askNoteCount()
-        val scored = pool.mapNotNull { scoreNote(it, analysis, frequency, noteCount) }
+        val scored = pool.mapNotNull { scoreNote(it, analysis, frequency, noteCount, anchors = anchors) }
             .sortedWith(compareByDescending<ScoredNote> { it.score }.thenBy { pathRank(it.path) }.thenBy { it.path })
         val seeds = scored.filter { it.canSeed }.take(5)
         if (seeds.isEmpty()) {
@@ -90,10 +91,10 @@ class AskPipeline(
         val byPath = (pool + index.notesForAsk()).associateBy { it.path }
         val seedPaths = seeds.map { it.path }.toSet()
         val ordered = seeds.map { seed ->
-            DraftPage(seed.path, seed.title, seed.type, excerptFor(seed.body, analysis), fromGraph = false)
+            DraftPage(seed.path, seed.title, seed.type, excerptFor(seed.body, analysis, anchors), fromGraph = false)
         } + neighbors.mapNotNull { neighbor ->
             val note = byPath[neighbor.path] ?: return@mapNotNull null
-            DraftPage(note.path, note.title, note.type, excerptFor(note.body, analysis), fromGraph = neighbor.path !in seedPaths)
+            DraftPage(note.path, note.title, note.type, excerptFor(note.body, analysis, anchors), fromGraph = neighbor.path !in seedPaths)
         }
         val packed = limitPacket(ordered, PACKET_CHARS)
         if (packed.isEmpty()) return AskResult.NoMatch("Nothing in the wiki matches.", tokenHits, 0)
@@ -164,10 +165,13 @@ fun renderPacket(question: String, schema: String, pages: List<PacketPage>): Str
     }
 }
 
-private fun excerptFor(body: String, analysis: com.neojou.mystudy.wiki.markdown.QueryAnalysis): String {
-    val anchors = analysis.bigrams.filter { it !in setOf("原子", "筆記", "方法", "概念", "系統", "设计", "設計", "知識", "知识") } +
-        listOf(analysis.phrase)
-    return excerptAround(body, anchors.filter { it.isNotBlank() }, 1_500)
+private fun excerptFor(
+    body: String,
+    analysis: com.neojou.mystudy.wiki.markdown.QueryAnalysis,
+    anchors: List<String>,
+): String {
+    val terms = (anchors + analysis.phrase).filter { it.isNotBlank() }.distinct()
+    return excerptAround(body, terms, 1_500)
 }
 
 private fun pathRank(path: String): Int = when {

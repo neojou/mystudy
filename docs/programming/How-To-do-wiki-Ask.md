@@ -27,7 +27,7 @@ AskPipeline(current, client()).ask(asked, settings.ollamaNumCtx)
 | --- | --- |
 | 問答管線、system prompt、packet、存成 query 頁 | `composeApp/src/desktopMain/kotlin/com/neojou/mystudy/wiki/ask/AskPipeline.kt` |
 | 查詢切詞 | `composeApp/src/desktopMain/kotlin/com/neojou/mystudy/wiki/markdown/MarkdownDocs.kt` 的 `analyzeQuery` |
-| 詞彙檢索、評分、泛用詞 | `composeApp/src/desktopMain/kotlin/com/neojou/mystudy/wiki/ask/LexicalScore.kt` |
+| 詞彙檢索、anchor、評分 | `composeApp/src/desktopMain/kotlin/com/neojou/mystudy/wiki/ask/LexicalScore.kt` |
 | wikilink 圖、一跳擴展、hop 分數 | `composeApp/src/desktopMain/kotlin/com/neojou/mystudy/wiki/ask/LinkGraph.kt` |
 | SQLite 索引、FTS、alias、ask 用頁面 | `composeApp/src/desktopMain/kotlin/com/neojou/mystudy/wiki/index/WikiIndex.kt` |
 | Ollama `/api/chat`、字元預算 | `composeApp/src/desktopMain/kotlin/com/neojou/mystudy/wiki/ollama/OllamaClient.kt` |
@@ -47,51 +47,61 @@ Browse 搜尋共用 `lexicalPool` 與 `scoreNote`，入口是 `LexicalScore.kt` 
 
 ### 2. 本地切詞
 
-`analyzeQuery(question)` 在 `MarkdownDocs.kt`。這一步不呼叫模型，對齊 llm-wiki 的 `tokenize_query`。
+`analyzeQuery(question)` 在 `MarkdownDocs.kt`。這一步不呼叫模型。llm-wiki 的 `tokenize_query` 也是本地切詞；他們另外會放出每一個漢字。這裡不放單字，因為 `現` 這類字會讓無關頁變成種子。
 
 對「什麼是卡片盒筆記法」會得到：
 
-- `phrase`：`卡片盒筆記法`（去掉停用詞後最長的漢字片段）
+- `phrase`：`卡片盒筆記法`（去掉問句框架後最長的漢字片段）
+- `pieces`：`卡片盒筆記法`。這是內容片段，後面的 anchor 只用它
 - `bigrams`：`卡片`、`片盒`、`盒筆`、`筆記`、`記法`（重疊二字）
-- `extras`：長度至少 3 的拉丁詞，例如 `gpu`
+- `extras`：長度至少 3 的拉丁詞，例如 `gpu`。拉丁詞也進 `pieces`
 - `ftsTerms`：長度至少 3 的片段。FTS5 trigram 無法 MATCH 二字 token
 
-漢字停用詞包含「什麼 / 什么 / 與否 / 與 / 与 / 對於 / 對 / 对 / 從 / 从」，以及單字「是、的、了、在、有、和」。拉丁停用詞是常見英文疑問詞與介系詞。單個漢字不會進 token。
+對「何謂湧現?」會得到 `phrase`、`pieces`、`bigrams` 都是 `湧現`。`何謂` 被當成問句框架拿掉，所以 FTS 不會去找 `何謂湧`、`謂湧現` 這種問句裡才有的三字窗。
+
+問句框架是封閉類：`什麼 / 什么 / 何謂 / 何為 / 何为 / 為何 / 为何 / 為什麼 / 为什么 / 如何 / 怎麼 / 怎么 / 怎樣 / 怎样 / 是否 / 請問`，以及原來的 `與否 / 與 / 与 / 對於 / 對 / 对 / 從 / 从`。單字停用是「是、的、了、在、有、和」。內容名詞（`筆記`、`方法`、`原子`）不進這份清單。拉丁停用詞是常見英文疑問詞與介系詞。單個漢字不會進 token。
 
 `phrase`、`bigrams`、`extras` 全空時回 `NoMatch`，不打模型。
 
 ### 3. 詞彙候選池
 
-`lexicalPool` 在 `LexicalScore.kt`。
+`lexicalPool` 在 `LexicalScore.kt`。候選的優先順序是 anchor，然後 alias，然後 FTS，這樣二字概念不會被較長的 FTS 命中擠出前 40 頁。
 
-1. 用 `phrase`、`bigrams`、`extras` 查 `WikiIndex.pathsForAlias`
-2. 再用 `ftsTerms` 查 `WikiIndex.searchFts(..., 500)`
-3. `includedAskPath` 只留 `wiki/` 底下的頁，排除 `wiki/index.md`、`wiki/log.md`、`wiki/schema.md` 與任何 `raw/`
-4. 最多載入 40 頁
+1. `contentAnchors` 從最長的 `pieces` 取出索引裡真正出現過的最長子字串。每個 anchor 用 `WikiIndex.searchAskTerm` 做 `LIKE`。標題命中排在 heading、正文前面。二字詞走這條，不走 FTS
+2. 用 `phrase`、`bigrams`、`extras` 查 `WikiIndex.pathsForAlias`（整鍵相等）
+3. 再用 `ftsTerms` 查 `WikiIndex.searchFts(..., 500)`
+4. `includedAskPath` 只留 `wiki/` 底下的頁，排除 `wiki/index.md`、`wiki/log.md`、`wiki/schema.md` 與任何 `raw/`
+5. 最多載入 40 頁
 
-`tokenHits` 是通過路徑過濾後的候選數，畫面會顯示這個數字。
+`tokenHits` 是通過路徑過濾後的候選數，含後來當不成種子的 alias 命中。畫面會顯示這個數字。
 
-FTS 查詢由 `WikiIndex.ftsQuery` 組成：長度至少 3 的 term 用 `OR` 串成 `"卡片盒" OR "片盒筆"` 這類 phrase MATCH。
+「何謂湧現?」的 anchor 是 `湧現`。`pathsForAlias("湧現")` 對不上標題 `湧現 (Emergence)` 或檔名 `emergence-湧現`，FTS 也沒有二字 MATCH。`searchAskTerm` 的 `LIKE '%湧現%'` 會帶進標題含這個詞的概念頁、來源頁，以及只在正文寫到的頁。
+
+FTS 查詢由 `WikiIndex.ftsQuery` 組成：長度至少 3 的 term 用 `OR` 串成 `"卡片盒" OR "片盒筆"` 這類 phrase MATCH。tokenizer 維持 trigram。
 
 ### 4. 評分與種子
 
-`scoreNote` 對池裡每一頁打分。完全沒有 phrase 或 token 命中的頁丟掉。
+`scoreNote` 對池裡每一頁打分。phrase、anchor、token 都沒中的頁丟掉。
 
 | 條件 | 分數 |
 | --- | --- |
 | 標題或 alias 含整段 `phrase` | +50 |
-| 標題或 alias 含一個 token | +10 |
-| heading 或 body 含一個 token | +1 |
+| 標題或 alias 含一個 anchor | +50 |
+| heading 或 body 含一個 anchor | +8 |
+| 標題或 alias 含一個 bigram 或拉丁 token | +10 |
+| heading 或 body 含一個 bigram 或拉丁 token | +1 |
 | 路徑在 `wiki/concepts/`、`wiki/entities/` 或 `wiki/sources/` | +2 |
 
-同分時 `pathRank` 決定順序：concepts → entities → sources → queries → 其他，再比路徑字串。
+檔案頻率 `countAskTerm(token) / askNoteCount() > 0.20` 時，那個 token 若本身不是 anchor，貢獻再乘 0.1。這只影響排序。不再有 `原子`、`筆記`、`方法` 這種寫死的內容詞清單；問「何謂方法」時，`方法` 就是 anchor，頻率再高也能當種子。
 
-泛用詞會壓低分數，也會讓頁面當不成種子：
+種子只看 anchor。`contentAnchors` 的規則：
 
-- 固定集合：`原子`、`筆記`、`方法`、`概念`、`系統`、`设计`、`設計`、`知識`、`知识`
-- 文件頻率：`countAskTerm(token) / askNoteCount() > 0.20`
+- 只處理最長的內容片段。`什麼是卡片盒筆記法與原子` 的主體是 `卡片盒筆記法`，`原子` 不能單獨當種子
+- 在主體上由長到短找索引裡出現過的子字串（長度至少 2）。較短而且被更長命中包住的子字串丟掉
+- 主體在索引裡沒有任何長度至少 2 的子字串時，anchors 為空，不改去用較短的兄弟片段
+- 主體整段不在索引裡、但較短子字串在時，用那個子字串。頁面只寫 `湧現` 時，問句裡的 `湧現現象` 仍找得到
 
-命中的 token 全是泛用、標題又沒有整段 phrase 時，分數乘 0.1，且 `canSeed = false`。排序後最多取 5 個 `canSeed` 當種子。沒有種子就回 `NoMatch`，即使 FTS 有命中也不打模型。測試 `genericOnlyOverlapDoesNotCallTheModel` 鎖住這個行為。標題含整段 phrase 時仍可當種子，測試 `phraseInTitleStillRetrievesAtomicDesign`。
+`canSeed` 為真，只表示標題、alias、heading 或正文含至少一個 anchor。排序後最多取 5 個。沒有種子就回 `NoMatch`，即使 alias 有命中也不打模型。測試 `genericOnlyOverlapDoesNotCallTheModel` 鎖住「庫裡只有原子設計」的情形：`tokenHits >= 1`，模型不被呼叫。標題就是 `原子設計` 時仍可檢索，測試 `phraseInTitleStillRetrievesAtomicDesign`。同分時 `pathRank`：concepts → entities → sources → queries → 其他，再比路徑字串。
 
 ### 5. 一跳圖擴展
 
@@ -110,7 +120,7 @@ Adamic–Adar 對每個共同鄰居加 `1 / ln(max(degree, 2))`。鄰居依分�
 
 ### 6. 節錄與 packet 上限
 
-每頁正文用 `excerptAround`：在 `phrase` 與非泛用 bigram 第一次出現處附近截最多 1500 字（起點約在命中點往前 `cap/4`）。
+每頁正文用 `excerptAround`：在 anchor 與 `phrase` 第一次出現處附近截最多 1500 字（起點約在命中點往前 `cap/4`）。
 
 `limitPacket` 再裁一次：
 
@@ -235,8 +245,10 @@ Ask packet 另外用 `PACKET_PAGES`、`PACKET_CHARS`、`SCHEMA_EXCERPT` 先把�
 
 `WikiBehaviorTest.kt` 裡與 Ask 直接相關的案例：
 
-- `queryAnalysisEmitsCjkBigramsNotSingleCharacters`：切詞、FTS 長度
-- `cardQuestionOutranksAGenericFalseFriendAndAddsOneGraphHop`：評分順序、一跳鄰居、prompt 形狀、schema 節錄、不送 raw / index
-- `genericOnlyOverlapDoesNotCallTheModel`：沒有種子就不打模型
+- `queryAnalysisEmitsCjkBigramsNotSingleCharacters`：切詞、FTS 長度，以及「何謂湧現?」去掉問句框架後只剩 `湧現`
+- `cardQuestionOutranksAGenericFalseFriendAndAddsOneGraphHop`：anchor 只有 `卡片盒筆記法`、`原子設計` 不可當種子、一跳鄰居、prompt 形狀、schema 節錄、不送 raw / index
+- `genericOnlyOverlapDoesNotCallTheModel`：主體不在索引裡時，不因為較短的 `原子` 去打模型
 - `phraseInTitleStillRetrievesAtomicDesign`：標題整句仍可檢索
+- `definitionQuestionFindsTwoCharacterConceptWithoutTheQuestionFrame`：「何謂湧現?」找到標題 `湧現 (Emergence)`、來源頁，以及只在正文提到的實體；`原子設計` 不進 packet
+- `definitionOfAWordOnTheOldGenericListStillSeeds`：「何謂方法」仍以正文裡的 `方法` 當種子
 - `oneHopScoreUsesDirectSourcesAdamicAndSameType`：`hopScore` 公式

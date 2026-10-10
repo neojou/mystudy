@@ -164,16 +164,27 @@ private fun unquote(value: String): String {
  *
  * Tokenization stays local, as in llm-wiki `tokenize_query`: overlapping CJK bigrams, not an Ollama call.
  * Retrieval has to decide "nothing matches" before the model is allowed to run.
- * Single Han characters are not emitted. FTS5 trigram cannot MATCH a 2-character token, so [ftsTerms] are length ≥ 3.
+ * Single Han characters are not emitted. llm-wiki does emit them; a character such as 現 matches too many pages
+ * once it is allowed to seed. FTS5 trigram cannot MATCH a 2-character token, so [ftsTerms] are length ≥ 3.
+ * Two-character content is retrieved later by LIKE on [pieces], not by FTS.
+ *
+ * [pieces] are the content fragments: Han runs after interrogative stops, plus Latin tokens of length ≥ 3.
+ * Interrogatives are a closed class. Content nouns are not listed here.
  */
 data class QueryAnalysis(
     val phrase: String,
     val bigrams: List<String>,
     val extras: List<String>,
     val ftsTerms: List<String>,
+    val pieces: List<String>,
 )
 
-private val hanStops = listOf("什麼", "什么", "與否", "與", "与", "對於", "對", "对", "從", "从")
+private val hanStops = listOf(
+    "什麼", "什么", "與否",
+    "何謂", "何為", "何为", "為何", "为何", "為什麼", "为什么",
+    "如何", "怎麼", "怎么", "怎樣", "怎样", "是否", "請問",
+    "對於", "對", "对", "從", "从", "與", "与",
+)
 private val hanStopChars = setOf('是', '的', '了', '在', '有', '和')
 private val latinStops = setOf(
     "the", "is", "a", "an", "what", "how", "are", "was", "were",
@@ -184,14 +195,15 @@ private val latinStops = setOf(
 
 fun analyzeQuery(question: String): QueryAnalysis {
     val lower = question.lowercase(Locale.ROOT)
-    val pieces = Regex("[\\p{IsHan}]+").findAll(lower).flatMap { match ->
+    val hanPieces = Regex("[\\p{IsHan}]+").findAll(lower).flatMap { match ->
         stripHanStops(match.value).split(Regex("\\s+")).filter { it.length >= 2 }
     }.toList()
-    val phrase = pieces.maxByOrNull { it.length }.orEmpty()
-    val bigrams = pieces.flatMap { bigramsOf(it) }.distinct()
+    val phrase = hanPieces.maxByOrNull { it.length }.orEmpty()
+    val bigrams = hanPieces.flatMap { bigramsOf(it) }.distinct()
     val extras = Regex("[a-z][a-z0-9_]{2,}").findAll(lower).map { it.value }.filter { it !in latinStops }.distinct().toList()
-    val fts = (pieces.flatMap { ftsWindows(it) } + extras).filter { it.length >= 3 }.distinct()
-    return QueryAnalysis(phrase, bigrams, extras, fts)
+    val pieces = (hanPieces + extras).distinct()
+    val fts = (hanPieces.flatMap { ftsWindows(it) } + extras).filter { it.length >= 3 }.distinct()
+    return QueryAnalysis(phrase, bigrams, extras, fts, pieces)
 }
 
 private fun stripHanStops(run: String): String {

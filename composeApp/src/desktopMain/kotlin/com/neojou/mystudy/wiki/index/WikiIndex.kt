@@ -155,7 +155,38 @@ class WikiIndex private constructor(
         return out
     }
 
-    fun searchLike(term: String, limit: Int): List<String> {
+    /**
+ * Ask-path substring search. Title hits come before heading hits, then body hits.
+ * FTS5 trigram cannot MATCH a 2-character term; callers use this for those anchors.
+ */
+fun searchAskTerm(term: String, limit: Int): List<String> {
+    if (term.isBlank() || limit <= 0) return emptyList()
+    val pattern = likePattern(term)
+    val out = mutableListOf<String>()
+    connection.prepareStatement(
+        """
+        SELECT path FROM notes
+        WHERE path LIKE 'wiki/%'
+          AND path NOT IN ('wiki/index.md', 'wiki/log.md', 'wiki/schema.md')
+          AND (title LIKE ? ESCAPE '\' OR body LIKE ? ESCAPE '\' OR headings_json LIKE ? ESCAPE '\')
+        ORDER BY CASE
+            WHEN title LIKE ? ESCAPE '\' THEN 0
+            WHEN headings_json LIKE ? ESCAPE '\' THEN 1
+            ELSE 2
+        END, path
+        LIMIT ?
+        """.trimIndent(),
+    ).use { statement ->
+        repeat(5) { statement.setString(it + 1, pattern) }
+        statement.setInt(6, limit)
+        statement.executeQuery().use { rows ->
+            while (rows.next()) out += rows.getString(1)
+        }
+    }
+    return out
+}
+
+fun searchLike(term: String, limit: Int): List<String> {
         val pattern = likePattern(term)
         val out = mutableListOf<String>()
         connection.prepareStatement(

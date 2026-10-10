@@ -16,6 +16,7 @@ import com.neojou.mystudy.wiki.ask.GraphNode
 import com.neojou.mystudy.wiki.ask.PacketEdge
 import com.neojou.mystudy.wiki.ask.PacketPage
 import com.neojou.mystudy.wiki.ask.WikiGraph
+import com.neojou.mystudy.wiki.ask.contentAnchors
 import com.neojou.mystudy.wiki.ask.documentFrequency
 import com.neojou.mystudy.wiki.ask.hopScore
 import com.neojou.mystudy.wiki.ask.limitPacket
@@ -336,10 +337,17 @@ class WikiBehaviorTest {
         val analysis = analyzeQuery("什麼是卡片盒筆記法")
         assertEquals("卡片盒筆記法", analysis.phrase)
         assertEquals(listOf("卡片", "片盒", "盒筆", "筆記", "記法"), analysis.bigrams)
+        assertEquals(listOf("卡片盒筆記法"), analysis.pieces)
         assertTrue(analysis.bigrams.none { it == "原子" || it.length == 1 })
         assertTrue(analysis.ftsTerms.all { it.length >= 3 })
         assertNull(ftsQuery(listOf("原子", "卡")))
         assertEquals("\"卡片盒\"", ftsQuery(listOf("原子", "卡片盒")))
+        val defined = analyzeQuery("何謂湧現?")
+        assertEquals("湧現", defined.phrase)
+        assertEquals(listOf("湧現"), defined.pieces)
+        assertEquals(listOf("湧現"), defined.bigrams)
+        assertTrue(defined.ftsTerms.none { "何" in it || "謂" in it })
+        assertTrue(defined.bigrams.none { it.length == 1 })
     }
 
     @Test
@@ -391,11 +399,13 @@ class WikiBehaviorTest {
             index.reconcileAll()
             assertTrue(index.pathsForAlias("原子").contains("wiki/concepts/原子設計.md"))
             val analysis = analyzeQuery("什麼是卡片盒筆記法與原子")
+            val anchors = contentAnchors(analysis.pieces) { index.countAskTerm(it) > 0 }
+            assertEquals(listOf("卡片盒筆記法"), anchors)
             val frequency = documentFrequency(index, analysis.bigrams + analysis.extras)
             val count = index.askNoteCount()
-            val zettel = assertNotNull(scoreNote(index.load("wiki/concepts/卡片盒筆記法.md")!!, analysis, frequency, count))
-            val other = assertNotNull(scoreNote(index.load("wiki/concepts/其他.md")!!, analysis, frequency, count))
-            val atomic = assertNotNull(scoreNote(index.load("wiki/concepts/原子設計.md")!!, analysis, frequency, count))
+            val zettel = assertNotNull(scoreNote(index.load("wiki/concepts/卡片盒筆記法.md")!!, analysis, frequency, count, anchors = anchors))
+            val other = assertNotNull(scoreNote(index.load("wiki/concepts/其他.md")!!, analysis, frequency, count, anchors = anchors))
+            val atomic = assertNotNull(scoreNote(index.load("wiki/concepts/原子設計.md")!!, analysis, frequency, count, anchors = anchors))
             assertTrue(zettel.canSeed)
             assertTrue(other.canSeed)
             assertFalse(atomic.canSeed)
@@ -485,6 +495,86 @@ class WikiBehaviorTest {
             assertEquals(1, calls)
             assertEquals("wiki/concepts/原子設計.md", answer.pages.single().path)
             assertEquals(listOf("wiki/concepts/原子設計.md"), answer.sourcePaths)
+        }
+    }
+
+    @Test
+    fun definitionQuestionFindsTwoCharacterConceptWithoutTheQuestionFrame() {
+        val root = scaffoldWiki(tempDir())
+        writeWikiPage(
+            root,
+            "wiki/concepts/emergence-湧現.md",
+            "湧現 (Emergence)",
+            "concept",
+            emptyList(),
+            emptyList(),
+            "湧現是指整體出現了組件裡沒有的性質。\n",
+        )
+        writeWikiPage(
+            root,
+            "wiki/sources/湧現與卡片盒筆記法.md",
+            "湧現與卡片盒筆記法",
+            "source",
+            emptyList(),
+            emptyList(),
+            "這份來源同時寫到湧現與卡片盒。\n",
+        )
+        writeWikiPage(
+            root,
+            "wiki/entities/bob-doto.md",
+            "Bob Doto",
+            "entity",
+            emptyList(),
+            emptyList(),
+            "他用偶然性來說明知識的湧現。\n",
+        )
+        writeWikiPage(
+            root,
+            "wiki/concepts/原子設計.md",
+            "原子設計",
+            "concept",
+            listOf("原子"),
+            emptyList(),
+            "原子化是另一件事。\n",
+        )
+        WikiIndex.open(root, tempDir().resolve("emergence.sqlite")).use { index ->
+            index.reconcileAll()
+            var calls = 0
+            val result = AskPipeline(index, ChatClient { calls += 1; "湧現是整體的新性質" }).ask("何謂湧現?", 65536)
+            val answer = assertIs<AskResult.Answer>(result)
+            assertEquals(1, calls)
+            assertTrue(answer.tokenHits >= 3)
+            assertEquals(
+                listOf(
+                    "wiki/concepts/emergence-湧現.md",
+                    "wiki/sources/湧現與卡片盒筆記法.md",
+                    "wiki/entities/bob-doto.md",
+                ),
+                answer.pages.map { it.path },
+            )
+            assertTrue(answer.pages.none { it.path.contains("原子") })
+        }
+    }
+
+    @Test
+    fun definitionOfAWordOnTheOldGenericListStillSeeds() {
+        val root = scaffoldWiki(tempDir())
+        writeWikiPage(
+            root,
+            "wiki/concepts/做法.md",
+            "做法說明",
+            "concept",
+            emptyList(),
+            emptyList(),
+            "這裡討論方法的取捨。\n",
+        )
+        WikiIndex.open(root, tempDir().resolve("method.sqlite")).use { index ->
+            index.reconcileAll()
+            var calls = 0
+            val result = AskPipeline(index, ChatClient { calls += 1; "方法是一種取捨" }).ask("何謂方法", 65536)
+            val answer = assertIs<AskResult.Answer>(result)
+            assertEquals(1, calls)
+            assertEquals("wiki/concepts/做法.md", answer.pages.single().path)
         }
     }
 
