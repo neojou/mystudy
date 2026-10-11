@@ -378,7 +378,7 @@ fun SettingsPane(controller: StudyController, modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun CopyableScroll(
+internal fun CopyableScroll(
     modifier: Modifier = Modifier,
     content: @Composable () -> Unit,
 ) {

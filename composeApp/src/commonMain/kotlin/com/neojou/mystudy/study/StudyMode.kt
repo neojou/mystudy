@@ -6,6 +6,7 @@ package com.neojou.mystudy.study
 enum class StudyMode {
     Home,
     Browse,
+    Chat,
     Ingest,
     Ask,
     Settings,

@@ -1,12 +1,16 @@
 # 程式如何做 Wiki Ask
 
+這是 Lexical Ask，選單名稱是 Ask (keyword)。主要問答入口是 Chat，見 `docs/programming/How-To-do-wiki-Chat.md`。
+
+已知限制：`analyzeQuery` 會把「是的了在有和」當成切點。`請介紹植田和男` 的完整人名不會成為查詢詞；vault 裡大量含「介紹」的頁可能占滿 40 頁池。這條路徑的切詞與評分不改。要查這種名字，用 Chat。
+
 Ask 用本地索引先找出相關 wiki 頁，組成一份有編號的 packet，再把 packet 送給本機 Ollama。模型只能根據 packet 裡的文字回答。沒有種子頁時不會呼叫模型。
 
 這份說明對應 Desktop 實作。入口在畫面，核心在 `AskPipeline.ask`。
 
 ## 呼叫鏈
 
-Top Menu 的 `Wiki → Ask` 把畫面切到 `StudyMode.Ask`。
+Top Menu 的 `Wiki → Ask (keyword)` 把畫面切到 `StudyMode.Ask`。
 
 - 選單：`composeApp/src/commonMain/kotlin/com/neojou/mystudy/HomeScreen.kt`
 - 模式：`composeApp/src/commonMain/kotlin/com/neojou/mystudy/study/StudyMode.kt`

@@ -1,11 +1,21 @@
 package com.neojou.mystudy.study
 
+import com.neojou.mystudy.wiki.agent.AgentAction
+import com.neojou.mystudy.wiki.agent.AgentEvent
+import com.neojou.mystudy.wiki.agent.ChatAgent
+import com.neojou.mystudy.wiki.agent.ChatAgentResult
+import com.neojou.mystudy.wiki.agent.ChatReference
+import com.neojou.mystudy.wiki.agent.ChatSession
+import com.neojou.mystudy.wiki.agent.ToolObservation
+import com.neojou.mystudy.wiki.agent.WikiTools
 import com.neojou.mystudy.wiki.ask.AskPipeline
 import com.neojou.mystudy.wiki.ask.AskResult
 import com.neojou.mystudy.wiki.ask.PacketEdge
 import com.neojou.mystudy.wiki.ask.PacketPage
 import com.neojou.mystudy.wiki.ask.browseHits
+import com.neojou.mystudy.wiki.ask.packetEdges
 import com.neojou.mystudy.wiki.ask.proposeQueryFile
+import com.neojou.mystudy.wiki.ask.schemaExcerpt
 import com.neojou.mystudy.wiki.index.NoteSummary
 import com.neojou.mystudy.wiki.index.WikiIndex
 import com.neojou.mystudy.wiki.index.WikiWatcher
@@ -31,6 +41,7 @@ import com.neojou.mystudy.wiki.vault.linkIntoRawSource
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
@@ -44,6 +55,12 @@ import java.nio.file.Path
 import java.time.LocalDate
 import java.util.concurrent.Executors
 import kotlin.io.path.isDirectory
+
+data class ChatBubble(
+    val question: String,
+    val steps: List<String>,
+    val answer: String,
+)
 
 data class ClaimChoice(
     val claim: Claim,
@@ -135,12 +152,44 @@ class StudyController(
     var askReaderBody by mutableStateOf("")
         private set
 
+    var chatInput by mutableStateOf("")
+    var chatHistory by mutableStateOf<List<ChatBubble>>(emptyList())
+        private set
+    var liveQuestion by mutableStateOf("")
+        private set
+    var liveSteps by mutableStateOf<List<String>>(emptyList())
+        private set
+    var liveAnswer by mutableStateOf("")
+        private set
+    var chatShown by mutableStateOf<List<ChatReference>>(emptyList())
+        private set
+    var chatPages by mutableStateOf<List<PacketPage>>(emptyList())
+        private set
+    var chatEdges by mutableStateOf<List<PacketEdge>>(emptyList())
+        private set
+    var chatMessage by mutableStateOf("")
+        private set
+    var chatGraphOpen by mutableStateOf(false)
+        private set
+    var chatReaderPath by mutableStateOf<String?>(null)
+        private set
+    var chatReaderTitle by mutableStateOf("")
+        private set
+    var chatReaderBody by mutableStateOf("")
+        private set
+
     var proposal by mutableStateOf<DraftProposal?>(null)
         private set
 
     var pendingMode by mutableStateOf<StudyMode?>(null)
         private set
     @Volatile private var index: WikiIndex? = null
+    private val chatSession = ChatSession()
+    private var chatJob: Job? = null
+    private var chatGeneration = 0
+    private var chatQuestion = ""
+    private var chatAnswer = ""
+    private var chatSources = emptyList<String>()
     private var watcher: WikiWatcher? = null
     private var debounce: Job? = null
     private var generation = 0
@@ -516,6 +565,185 @@ class StudyController(
         }
     }
 
+    fun chat() {
+        val asked = chatInput.trim()
+        if (asked.isEmpty() || chatJob?.isActive == true) return
+        val generation = ++chatGeneration
+        chatQuestion = asked
+        chatAnswer = ""
+        chatSources = emptyList()
+        liveQuestion = asked
+        liveSteps = emptyList()
+        liveAnswer = ""
+        chatShown = emptyList()
+        chatPages = emptyList()
+        chatEdges = emptyList()
+        chatMessage = ""
+        chatGraphOpen = false
+        closeChatReader()
+        chatJob = scope.launch {
+            busy = true
+            try {
+                val schema = withContext(dbDispatcher) {
+                    schemaExcerpt(index?.load("wiki/schema.md")?.body)
+                }
+                if (index == null) {
+                    chatMessage = "Index is not open."
+                    return@launch
+                }
+                val agent = ChatAgent(
+                    client = client(),
+                    tools = { action, refs ->
+                        withContext(dbDispatcher) {
+                            val current = index ?: return@withContext ToolObservation("Index is not open.")
+                            val tools = WikiTools(current)
+                            when (action) {
+                                is AgentAction.Search -> ToolObservation("", outcome = tools.search(action.query))
+                                is AgentAction.ReadPage -> tools.read(action.path, refs)
+                                else -> ToolObservation("unsupported")
+                            }
+                        }
+                    },
+                    onEvent = { event ->
+                        if (generation == chatGeneration) applyChatEvent(event)
+                    },
+                    edgesFor = { paths ->
+                        withContext(dbDispatcher) {
+                            val current = index ?: return@withContext emptyList()
+                            packetEdges(current.wikiGraph(), paths).map { (from, target) ->
+                                PacketEdge(from, target.first, target.second)
+                            }
+                        }
+                    },
+                )
+                when (val result = agent.run(asked, settings.ollamaNumCtx, chatSession.recent(), schema)) {
+                    is ChatAgentResult.NoMatch -> {
+                        if (generation != chatGeneration) return@launch
+                        chatMessage = result.message
+                        chatHistory = chatHistory + ChatBubble(asked, result.steps, "")
+                        liveQuestion = ""
+                        liveSteps = emptyList()
+                    }
+                    is ChatAgentResult.NotCalled -> {
+                        if (generation != chatGeneration) return@launch
+                        chatMessage = result.message
+                    }
+                    is ChatAgentResult.Answer -> {
+                        if (generation != chatGeneration) return@launch
+                        chatAnswer = result.text
+                        liveAnswer = result.text
+                        chatShown = result.shown
+                        chatPages = result.pages
+                        chatEdges = result.edges
+                        chatSources = when {
+                            result.cited.isNotEmpty() ->
+                                result.references.filter { it.number in result.cited }.map { it.path }
+                            result.references.any { it.read } ->
+                                result.references.filter { it.read }.map { it.path }
+                            else -> emptyList()
+                        }
+                        chatHistory = chatHistory + ChatBubble(asked, result.steps, result.text)
+                        chatSession.add(asked, result.text)
+                        liveQuestion = ""
+                        liveSteps = emptyList()
+                        liveAnswer = ""
+                    }
+                }
+            } catch (cancel: CancellationException) {
+                throw cancel
+            } catch (caught: Exception) {
+                if (generation == chatGeneration) chatMessage = caught.message ?: "Chat failed."
+            } finally {
+                if (generation == chatGeneration) busy = false
+            }
+        }
+    }
+
+    fun cancelChat() {
+        chatGeneration += 1
+        chatJob?.cancel()
+        busy = false
+    }
+
+    fun newChat() {
+        cancelChat()
+        chatSession.clear()
+        chatInput = ""
+        chatQuestion = ""
+        chatAnswer = ""
+        chatSources = emptyList()
+        chatHistory = emptyList()
+        liveQuestion = ""
+        liveSteps = emptyList()
+        liveAnswer = ""
+        chatShown = emptyList()
+        chatPages = emptyList()
+        chatEdges = emptyList()
+        chatMessage = ""
+        chatGraphOpen = false
+        closeChatReader()
+    }
+
+    fun showChatGraph() {
+        if (chatPages.isNotEmpty()) chatGraphOpen = true
+    }
+
+    fun closeChatGraph() {
+        chatGraphOpen = false
+    }
+
+    fun closeChatReader() {
+        chatReaderPath = null
+        chatReaderTitle = ""
+        chatReaderBody = ""
+    }
+
+    fun openChatPage(path: String) {
+        val page = chatShown.firstOrNull { it.path == path }
+        chatReaderPath = path
+        chatReaderTitle = page?.title?.ifBlank { path } ?: path
+        scope.launch {
+            val body = withContext(dbDispatcher) { index?.load(path)?.body.orEmpty() }
+            if (chatReaderPath == path) chatReaderBody = body
+        }
+    }
+
+    fun fileChatAnswer() {
+        if (chatAnswer.isBlank()) return
+        val root = wikiRoot ?: return
+        val asked = chatQuestion
+        val answer = chatAnswer
+        val sources = chatSources
+        scope.launch {
+            val draft = withContext(dbDispatcher) {
+                val current = index
+                proposeQueryFile(
+                    question = asked,
+                    answer = answer,
+                    sourcePaths = sources,
+                    today = LocalDate.now(),
+                    exists = { relative ->
+                        current?.noteExists(relative) == true ||
+                            Files.isRegularFile(Path.of(root).resolve(relative))
+                    },
+                )
+            }
+            proposal = draft
+        }
+    }
+
+    private fun applyChatEvent(event: AgentEvent) {
+        when (event) {
+            is AgentEvent.Thinking -> chatMessage = "step ${event.step}"
+            is AgentEvent.ToolStart -> Unit
+            is AgentEvent.ToolEnd -> {
+                liveSteps = liveSteps + event.summary
+                chatMessage = ""
+            }
+            is AgentEvent.ReferenceAdded -> Unit
+        }
+    }
+
     fun fileAnswer() {
         if (answer.isBlank()) return
         val root = wikiRoot ?: return
@@ -572,6 +800,8 @@ class StudyController(
     }
 
     fun close() {
+        chatGeneration += 1
+        chatJob?.cancel()
         generation += 1
         stopWatcher()
         runBlocking(dbDispatcher) {

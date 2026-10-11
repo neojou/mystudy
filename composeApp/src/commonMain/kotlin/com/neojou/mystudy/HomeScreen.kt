@@ -62,7 +62,8 @@ fun HomeScreen(about: AboutRequest) {
             label = "Wiki",
             children = listOf(
                 MyTopMenuItem(id = "browse", label = "Browse", onClick = { mode = StudyMode.Browse }),
-                MyTopMenuItem(id = "ask", label = "Ask", onClick = { mode = StudyMode.Ask }),
+                MyTopMenuItem(id = "chat", label = "Chat", onClick = { mode = StudyMode.Chat }),
+                MyTopMenuItem(id = "ask", label = "Ask (keyword)", onClick = { mode = StudyMode.Ask }),
             ),
         ),
         MyTopMenuItem(

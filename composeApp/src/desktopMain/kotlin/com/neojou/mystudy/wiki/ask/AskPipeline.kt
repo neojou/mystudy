@@ -185,7 +185,7 @@ private fun excerptFor(
     return excerptAround(body, terms, 1_500)
 }
 
-private fun pathRank(path: String): Int = when {
+internal fun pathRank(path: String): Int = when {
     path.startsWith("wiki/concepts/") -> 0
     path.startsWith("wiki/entities/") -> 1
     path.startsWith("wiki/sources/") -> 2

@@ -58,6 +58,7 @@ class WikiIndex private constructor(
     val wikiRoot: Path,
 ) : AutoCloseable {
     private val byAlias = HashMap<String, MutableSet<String>>()
+    private val byLooseAlias = HashMap<String, MutableSet<String>>()
     private val byTag = HashMap<String, MutableSet<String>>()
     private var graphCache: com.neojou.mystudy.wiki.ask.WikiGraph? = null
 
@@ -248,6 +249,17 @@ fun searchLike(term: String, limit: Int): List<String> {
     }
 
     fun pathsForAlias(key: String): List<String> = byAlias[normalizeKey(key)].orEmpty().toList()
+
+    /**
+     * Exact alias hits plus a parenthesis-stripped key used only by Chat.
+     * [pathsForAlias] stays exact so Lexical Ask does not gain those keys.
+     */
+    fun pathsForLooseAlias(key: String): List<String> {
+        val normalized = normalizeKey(key)
+        val exact = byAlias[normalized].orEmpty()
+        val loose = byLooseAlias[normalized].orEmpty()
+        return (exact + loose).distinct()
+    }
 
     fun pathsForTag(tag: String): List<String> = byTag[tag].orEmpty().toList()
 
@@ -510,14 +522,32 @@ fun searchLike(term: String, limit: Int): List<String> {
         }
     }
 
+    private fun looseAliasKey(key: String): String? {
+        var text = key
+        var stripped = looseParens.replace(text, "")
+        while (stripped != text) {
+            text = stripped
+            stripped = looseParens.replace(text, "")
+        }
+        val normalized = normalizeKey(text)
+        return normalized.ifBlank { null }
+    }
+
     private fun reloadMaps() {
         graphCache = null
         byAlias.clear()
+        byLooseAlias.clear()
         byTag.clear()
         connection.createStatement().use { statement ->
             statement.executeQuery("SELECT alias_key, path FROM aliases").use { rows ->
                 while (rows.next()) {
-                    byAlias.getOrPut(rows.getString(1)) { linkedSetOf() }.add(rows.getString(2))
+                    val key = rows.getString(1)
+                    val path = rows.getString(2)
+                    byAlias.getOrPut(key) { linkedSetOf() }.add(path)
+                    val loose = looseAliasKey(key)
+                    if (loose != null && loose != key) {
+                        byLooseAlias.getOrPut(loose) { linkedSetOf() }.add(path)
+                    }
                 }
             }
         }
@@ -571,6 +601,7 @@ fun searchLike(term: String, limit: Int): List<String> {
     }
 
     companion object {
+        private val looseParens = Regex("""\s*[（(][^）)]*[）)]\s*""")
         const val MAX_INDEX_BYTES: Long = 2_000_000
 
         fun open(wikiRoot: Path, database: Path): WikiIndex {
