@@ -2,6 +2,8 @@
 
 這個專案把「給人看的名稱」、「Gradle 專案名」和「Kotlin 套件名」分開存放。畫面與 macOS 選單讀的是顯示名稱。改名請用 `./configure.sh proj_name`，不要只改其中一個檔案。
 
+目前 Gradle 只編 desktop JVM，見 `composeApp/build.gradle.kts` 與 `docs/Architecture.md`。下面的 `wasmJsMain` 是 `configure.sh` 仍會改寫的路徑，那些檔不在目前的 source set。
+
 ## 三種名稱
 
 | 用途 | 寫在哪裡 | 誰讀它 |

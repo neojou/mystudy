@@ -39,7 +39,10 @@ Wiki 選單沒有 Ingest。Browse 與 Ask 仍在 `HomeScreen.kt` 的 `Wiki` 子�
 | 新 link 路徑守衛 | `composeApp/src/desktopMain/kotlin/com/neojou/mystudy/wiki/vault/WriteGuard.kt` 的 `assertNewRawFile` |
 | 建立 `raw/sources/` | `composeApp/src/desktopMain/kotlin/com/neojou/mystudy/wiki/vault/WikiScaffolder.kt` |
 | 狀態、預覽 Ingest（只 link） | `composeApp/src/desktopMain/kotlin/com/neojou/mystudy/study/StudyController.kt` |
-| Extract / Draft prompt 與提案 | `composeApp/src/desktopMain/kotlin/com/neojou/mystudy/wiki/ingest/IngestPipeline.kt` |
+| Extract / Draft 提案 | `composeApp/src/desktopMain/kotlin/com/neojou/mystudy/wiki/ingest/IngestPipeline.kt` |
+| Extract 送給模型的 prompt | `ai-prompts/ingest-extract.md` |
+| Draft 送給模型的 prompt | `ai-prompts/ingest-draft.md` |
+| 讀 prompt 檔、去掉註解、填 `{{名稱}}` | `composeApp/src/desktopMain/kotlin/com/neojou/mystudy/wiki/prompt/PromptFiles.kt` |
 | 確認後寫入 index / log | `composeApp/src/desktopMain/kotlin/com/neojou/mystudy/wiki/vault/ApplyWrites.kt` |
 | Ollama、`json = true`、budget | `composeApp/src/desktopMain/kotlin/com/neojou/mystudy/wiki/ollama/OllamaClient.kt` |
 | 畫面 | `HomePane` 預覽；`IngestPane` 仍在但預覽流程不會切過去 |
@@ -85,9 +88,9 @@ raw/sources/卡片盒筆記法.md
 
 ### 1. Extract
 
-`IngestPipeline.extract(rawText, numCtx)`。`num_ctx <= 4096` 或原文加 system 超過字元預算則停下，不打模型。
+`IngestPipeline.extract(rawText, numCtx)`。每次呼叫前讀 `ai-prompts/ingest-extract.md`。`num_ctx <= 4096`，或讀出來的 system 加 user 超過字元預算，則停下，不打模型。檔案缺失、區段缺失、或缺少 `{{raw}}` 同樣停下。
 
-`ChatRequest(EXTRACT_SYSTEM, rawText, json = true)`。
+`ChatRequest(system, user, json = true)`。user 區段預設只有 `{{raw}}`，送出內容就是來源全文。`json = true` 寫在程式裡，改 prompt 檔不會關掉。
 
 `keepVerbatim` 丢掉 excerpt 沒有完整出現在原文裡的項。沒有任何 verbatim claim 則停下，不寫檔。
 
@@ -97,25 +100,24 @@ Controller 把結果列成可取消勾選的 claims。這一步由 `extractClaim
 
 `IngestPipeline.draft(index, rawRelative, claims, numCtx, today)`。沒勾選、context 太小、或沒有 `wiki/schema.md` 則停下。
 
-User 訊息 `buildDraftUser`：
+User 訊息由 `ai-prompts/ingest-draft.md` 的區段填成：
 
 ```
 ## schema.md
-{schema 前 8000 字}
+{{schema}}
 
 ## claims
-- title: {title} type: {type}
-  {statement}
+{{claims}}
 
 ## existing pages
-## {path}
-title: {title}
-{body 前 1500 字}
+{{existing}}
 ```
 
-既有頁最多 8 則，只含 title 解析到唯一 concept/entity 的 claim。超預算就從後面丢掉既有頁。仍超則 `Stopped`，不打模型。
+`claim` 區段預設是 `- title: {{title}} type: {{type}}` 加上下一行的 `{{statement}}`。陳述裡的換行會先改成空白。`existing` 區段是 `## {{path}}`、`title: {{title}}`、`{{body}}`。標題對到多頁時用 `ambiguous` 區段。沒有既有頁時，`{{existing}}` 填 `none` 區段，預設是 `(none)`。
 
-`ChatRequest(DRAFT_SYSTEM, user, json = true)`。回傳去掉 code fence 後當 JSON。`buildIngestProposal` 在本地組提案：
+既有頁最多 8 則，只含 title 解析到唯一 concept/entity 的 claim。超預算就從後面丢掉既有頁。仍超則 `Stopped`，不打模型。prompt 檔讀不到也不打模型。
+
+`ChatRequest(system, user, json = true)`。回傳去掉 code fence 後當 JSON。`buildIngestProposal` 在本地組提案：
 
 | 情況 | 寫到哪 |
 | --- | --- |
@@ -133,30 +135,23 @@ title: {title}
 
 ## 送給模型的 prompt
 
-常數在 `IngestPipeline.kt`。Ask 用純文字（`json = false`）；Ingest 兩步都是 `json = true`。
+文字在 `ai-prompts/ingest-extract.md` 與 `ai-prompts/ingest-draft.md`。改用詞時改這兩個檔，存檔後下一次 Extract 或 Draft 生效。路徑、verbatim 檢查、JSON 解析仍在 `IngestPipeline.kt`。
 
-### Extract system：`EXTRACT_SYSTEM`
+每個檔第一個區段標記之前是前言，不送出。區段裡的 `<!-- 註解 -->` 會刪掉。Ask 用純文字（`json = false`）；Ingest 兩步都是 `json = true`，這個旗標不在 prompt 檔裡。
 
-```
-You extract claims from one source note. Use only that note.
-Return JSON: {"claims":[{"statement":"","excerpt":"","suggestedType":"concept|entity|","suggestedTitle":"","aliases":[]}]}
-The excerpt must be copied verbatim from the note.
-Set suggestedType to concept or entity only when that idea is actually in the note. Otherwise use an empty string.
-Do not invent claims. Keep titles in the note's language.
-JSON only.
-```
+### Extract：`ingest-extract.md`
 
-User 就是 raw 全文（已通過字元預算）。
+`system` 要求只從這一篇抽 claim，excerpt 必須逐字複製，`suggestedType` 只有 `concept`、`entity` 或空字串，並且只回 JSON。預設句子見該檔。
 
-### Draft system：`DRAFT_SYSTEM`
+`parseClaims` 讀的欄位名是 `claims`、`statement`、`excerpt`、`suggestedType`、`suggestedTitle`、`aliases`。改掉這些名字會停在「The model did not return claims JSON.」，不寫檔。
 
-```
-You draft wiki sections from the accepted claims and the existing page excerpts. Do not add ideas that are not in the claims.
-Return JSON: {"sourceSummary":"","sourceBody":"","pages":[{"title":"","type":"concept|entity","summary":"","section":"","conflict":false,"conflictNote":"","aliases":[],"tags":[]}],"logTitle":""}
-Include one pages item for each claim whose type is concept or entity. Use that claim's title.
-Set conflict true when the claim contradicts an existing excerpt. Do not rewrite the existing page.
-JSON only.
-```
+User 預設就是 `{{raw}}`，也就是通過字元預算的來源全文。
+
+### Draft：`ingest-draft.md`
+
+`system` 要求只根據 claims 與既有摘錄起草，每個 concept 或 entity claim 一則 page，標題用該 claim 的標題，矛盾時 `conflict` 為 true，並且只回 JSON。預設句子見該檔。
+
+解析用的欄位名是 `sourceSummary`、`sourceBody`、`pages`、`title`、`type`、`summary`、`section`、`conflict`、`conflictNote`、`aliases`、`tags`、`logTitle`。改掉名字會讓這一輪停下，不寫檔。
 
 模型不可自己指定檔案路徑。路徑由 `buildIngestProposal` 用 alias 解析與 `allocatePath` 決定。
 
@@ -170,7 +165,7 @@ JSON only.
 | `PromptBudget.RESERVE_TOKENS` | 4096 | `num_ctx` 必須大於這個值 |
 | `PromptBudget.SCHEMA_CAP` | 8000 | draft 裡 schema 節錄 |
 | `PromptBudget.EXISTING_EXCERPT` | 1500 | 每則既有頁 |
-| 既有頁數量 | 8 | `existingExcerpts` |
+| 既有頁數量 | 8 | draft user 的 existing 區段 |
 
 ## 與 llm-wiki 的對照
 

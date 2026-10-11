@@ -12,15 +12,13 @@ import com.neojou.mystudy.wiki.model.PageProposal
 import com.neojou.mystudy.wiki.ollama.ChatClient
 import com.neojou.mystudy.wiki.ollama.ChatRequest
 import com.neojou.mystudy.wiki.ollama.PromptBudget
+import com.neojou.mystudy.wiki.prompt.PromptException
+import com.neojou.mystudy.wiki.prompt.PromptFile
+import com.neojou.mystudy.wiki.prompt.loadPrompt
+import com.neojou.mystudy.wiki.prompt.locateAiPrompts
+import com.neojou.mystudy.wiki.prompt.render
+import java.nio.file.Path
 import java.time.LocalDate
-
-val ASK_SYSTEM: String = """
-你只回答使用者這一個問題。用繁體中文。
-一句話只放一個主張，句末用對應編號，例如 [1]。
-不要複製頁面的標題或小標。不要用訓練記憶補內容。不要上網。
-下面的頁面沒有寫的，只回答「沒有」。
-只能使用給定的編號。不要自己寫檔名或路徑。
-""".trimIndent()
 
 const val PACKET_PAGES: Int = 8
 const val PACKET_CHARS: Int = 6_000
@@ -67,6 +65,7 @@ sealed class AskResult {
 class AskPipeline(
     private val index: WikiIndex,
     private val client: ChatClient,
+    private val promptDirectory: Path? = null,
 ) {
     fun ask(question: String, numCtx: Int): AskResult {
         if (PromptBudget.tooSmall(numCtx)) {
@@ -105,12 +104,19 @@ class AskPipeline(
             PacketEdge(from, target.first, target.second)
         }
         val schema = schemaExcerpt(index.load("wiki/schema.md")?.body)
-        val user = renderPacket(question, schema, pages)
-        if (ASK_SYSTEM.length + user.length > PromptBudget.inputCharBudget(numCtx)) {
-            return AskResult.NotCalled("The matching page does not fit in the prompt budget. Nothing was sent.")
+        val (system, user) = try {
+            val prompt = loadPrompt(promptDirectory ?: locateAiPrompts(), "ask.md")
+            val system = prompt.require("system")
+            val user = renderPacket(question, schema, pages, prompt)
+            if (system.length + user.length > PromptBudget.inputCharBudget(numCtx)) {
+                return AskResult.NotCalled("The matching page does not fit in the prompt budget. Nothing was sent.")
+            }
+            system to user
+        } catch (error: PromptException) {
+            return AskResult.NotCalled(error.message ?: "Prompt file ai-prompts/ask.md could not be read. Nothing was sent.")
         }
         val answer = try {
-            client.complete(ChatRequest(ASK_SYSTEM, user, json = false))
+            client.complete(ChatRequest(system, user, json = false))
         } catch (error: Exception) {
             return AskResult.NotCalled(error.message ?: "Ollama failed")
         }
@@ -146,23 +152,28 @@ fun schemaExcerpt(text: String?): String {
     return text.substring(start).take(SCHEMA_EXCERPT)
 }
 
-fun renderPacket(question: String, schema: String, pages: List<PacketPage>): String = buildString {
-    append("問題：")
-    append(question.trim())
-    append("\n\n規則節錄（不是答案，不要引用）：\n")
-    append(schema)
-    append('\n')
-    for (page in pages) {
-        append("\n[")
-        append(page.number)
-        append("] ")
-        append(page.path)
-        append("\ntype: ")
-        append(page.type)
-        append('\n')
-        append(page.excerpt)
-        append('\n')
+fun renderPacket(question: String, schema: String, pages: List<PacketPage>, prompt: PromptFile): String {
+    val renderedPages = pages.joinToString("\n\n") { page ->
+        render(
+            prompt.require("page"),
+            mapOf(
+                "number" to page.number.toString(),
+                "path" to page.path,
+                "type" to page.type,
+                "excerpt" to page.excerpt,
+            ),
+            prompt.fileName,
+        )
     }
+    return render(
+        prompt.require("user"),
+        mapOf(
+            "question" to question.trim(),
+            "schema" to schema,
+            "pages" to renderedPages,
+        ),
+        prompt.fileName,
+    )
 }
 
 private fun excerptFor(

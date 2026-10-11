@@ -8,7 +8,6 @@ import com.neojou.mystudy.study.previewOffersIngest
 import com.neojou.mystudy.study.vaultTreeLabel
 import com.neojou.mystudy.study.inlineMarkdown
 import com.neojou.mystudy.study.markdownBlocks
-import com.neojou.mystudy.wiki.ask.ASK_SYSTEM
 import com.neojou.mystudy.wiki.ask.AskPipeline
 import com.neojou.mystudy.wiki.ask.AskResult
 import com.neojou.mystudy.wiki.ask.DraftPage
@@ -25,6 +24,7 @@ import com.neojou.mystudy.wiki.ask.scoreNote
 import com.neojou.mystudy.wiki.index.WikiIndex
 import com.neojou.mystudy.wiki.index.ftsQuery
 import com.neojou.mystudy.wiki.markdown.analyzeQuery
+import com.neojou.mystudy.wiki.ingest.DraftResult
 import com.neojou.mystudy.wiki.ingest.IngestPipeline
 import com.neojou.mystudy.wiki.ingest.ExtractResult
 import com.neojou.mystudy.wiki.ingest.buildIngestProposal
@@ -37,6 +37,8 @@ import com.neojou.mystudy.wiki.model.Claim
 import com.neojou.mystudy.wiki.model.Resolution
 import com.neojou.mystudy.wiki.model.defaultChecked
 import com.neojou.mystudy.wiki.ollama.ChatClient
+import com.neojou.mystudy.wiki.prompt.loadPrompt
+import com.neojou.mystudy.wiki.prompt.locateAiPrompts
 import com.neojou.mystudy.wiki.ollama.ChatException
 import com.neojou.mystudy.wiki.ollama.endpointOrigin
 import com.neojou.mystudy.wiki.vault.applyProposal
@@ -417,7 +419,10 @@ class WikiBehaviorTest {
                 "原子化見 wiki/concepts/atomic-design-原子設計.md"
             }).ask("什麼是卡片盒筆記法與原子", 65536)
             val answer = assertIs<AskResult.Answer>(result)
-            assertEquals(ASK_SYSTEM, system)
+            val askPrompt = loadPrompt(locateAiPrompts(), "ask.md")
+            assertEquals(askPrompt.require("system"), system)
+            assertFalse(system.contains("這段前言不會送給模型"))
+            assertFalse(prompt.contains("這段前言不會送給模型"))
             assertFalse(prompt.contains("## Catalog"))
             assertTrue(prompt.contains("[1]"))
             assertTrue(prompt.contains("規則節錄（不是答案，不要引用）："))
@@ -748,6 +753,147 @@ class WikiBehaviorTest {
             LocalDate.of(2026, 10, 8),
         )
         assertEquals("old page\n", file.readText())
+    }
+
+    @Test
+    fun askPromptDropsCommentsAndLeavesPlaceholdersInsidePageText() {
+        val root = scaffoldWiki(tempDir())
+        writeWikiPage(
+            root,
+            "wiki/concepts/原子設計.md",
+            "原子設計",
+            "concept",
+            emptyList(),
+            emptyList(),
+            "正文留下 {{schema}} 不展開。\n",
+        )
+        val prompts = tempDir().resolve("ai-prompts")
+        Files.createDirectories(prompts)
+        prompts.resolve("ask.md").writeText(
+            """
+            這段前言不會送給模型。
+
+            --- system ---
+            只回答這一問。 <!-- 這句不送
+            還是不送 -->
+
+            --- user ---
+            問題：{{question}}
+            {{schema}}
+            {{pages}}
+
+            --- page ---
+            [{{number}}] {{path}} {{type}}
+            {{excerpt}}
+            """.trimIndent(),
+        )
+        WikiIndex.open(root, tempDir().resolve("prompt.sqlite")).use { index ->
+            index.reconcileAll()
+            var system = ""
+            var user = ""
+            var calls = 0
+            val result = AskPipeline(index, ChatClient { request ->
+                calls += 1
+                system = request.system
+                user = request.user
+                "是一種設計方法"
+            }, prompts).ask("什麼是原子設計", 65536)
+            assertIs<AskResult.Answer>(result)
+            assertEquals(1, calls)
+            assertEquals("只回答這一問。", system)
+            assertFalse(system.contains("這段前言不會送給模型"))
+            assertFalse(system.contains("這句不送"))
+            assertFalse(user.contains("這段前言不會送給模型"))
+            assertFalse(user.contains("這句不送"))
+            assertTrue(user.contains("問題：什麼是原子設計"))
+            assertTrue(user.contains("[1] wiki/concepts/原子設計.md concept"))
+            assertTrue(user.contains("正文留下 {{schema}} 不展開。"))
+            assertTrue(user.contains("## Frontmatter"))
+        }
+    }
+
+    @Test
+    fun missingPromptSectionDoesNotCallTheModel() {
+        val root = scaffoldWiki(tempDir())
+        writeWikiPage(
+            root,
+            "wiki/concepts/原子設計.md",
+            "原子設計",
+            "concept",
+            emptyList(),
+            emptyList(),
+            "原子化是另一件事。\n",
+        )
+        val prompts = tempDir().resolve("ai-prompts")
+        Files.createDirectories(prompts)
+        prompts.resolve("ask.md").writeText(
+            """
+            --- user ---
+            {{question}}
+            {{schema}}
+            {{pages}}
+
+            --- page ---
+            {{number}} {{path}} {{type}} {{excerpt}}
+            """.trimIndent(),
+        )
+        WikiIndex.open(root, tempDir().resolve("missing-section.sqlite")).use { index ->
+            index.reconcileAll()
+            var calls = 0
+            val result = AskPipeline(index, ChatClient { calls += 1; "no" }, prompts).ask("什麼是原子設計", 65536)
+            val stopped = assertIs<AskResult.NotCalled>(result)
+            assertEquals(0, calls)
+            assertTrue(stopped.message.contains("ask.md"))
+            assertTrue(stopped.message.contains("system"))
+        }
+        var calls = 0
+        val missing = IngestPipeline(ChatClient { calls += 1; "no" }, tempDir()).extract("alpha", 65536)
+        val extractStopped = assertIs<ExtractResult.Stopped>(missing)
+        assertEquals(0, calls)
+        assertTrue(extractStopped.message.contains("ingest-extract.md"))
+    }
+
+    @Test
+    fun extractAndDraftPromptsDropThePreface() {
+        var system = ""
+        var user = ""
+        val extracted = IngestPipeline(ChatClient { request ->
+            system = request.system
+            user = request.user
+            """{"claims":[{"statement":"alpha","excerpt":"alpha","suggestedType":"concept","suggestedTitle":"Alpha","aliases":[]}]}"""
+        }).extract("alpha beta", 65536)
+        assertIs<ExtractResult.Ok>(extracted)
+        assertEquals("alpha beta", user)
+        assertTrue(system.contains("JSON only"))
+        assertFalse(system.contains("這段前言不會送給模型"))
+        assertFalse(user.contains("這段前言不會送給模型"))
+
+        val root = scaffoldWiki(tempDir())
+        WikiIndex.open(root, tempDir().resolve("draft-prompt.sqlite")).use { index ->
+            index.reconcileAll()
+            var calls = 0
+            val drafted = IngestPipeline(ChatClient { request ->
+                calls += 1
+                system = request.system
+                user = request.user
+                """{"sourceSummary":"s","sourceBody":"b","pages":[],"logTitle":"t"}"""
+            }).draft(
+                index,
+                "raw/sources/note.md",
+                listOf(Claim("一行\n陳述", "一行 陳述", "concept", "標題", emptyList())),
+                65536,
+                LocalDate.of(2026, 10, 11),
+            )
+            assertEquals(1, calls)
+            assertIs<DraftResult.Ok>(drafted)
+            assertTrue(system.contains("JSON only"))
+            assertFalse(system.contains("這段前言不會送給模型"))
+            assertFalse(user.contains("這段前言不會送給模型"))
+            assertTrue(user.contains("- title: 標題 type: concept"))
+            assertTrue(user.contains("  一行 陳述"))
+            assertTrue(user.contains("(none)"))
+            assertTrue(user.contains("## schema.md"))
+        }
     }
 
     @Test

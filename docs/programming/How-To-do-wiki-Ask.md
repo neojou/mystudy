@@ -25,7 +25,9 @@ AskPipeline(current, client()).ask(asked, settings.ollamaNumCtx)
 
 | 職責 | 路徑 |
 | --- | --- |
-| 問答管線、system prompt、packet、存成 query 頁 | `composeApp/src/desktopMain/kotlin/com/neojou/mystudy/wiki/ask/AskPipeline.kt` |
+| 問答管線、packet、存成 query 頁 | `composeApp/src/desktopMain/kotlin/com/neojou/mystudy/wiki/ask/AskPipeline.kt` |
+| Ask 送給模型的 prompt | `ai-prompts/ask.md` |
+| 讀 prompt 檔、去掉註解、填 `{{名稱}}` | `composeApp/src/desktopMain/kotlin/com/neojou/mystudy/wiki/prompt/PromptFiles.kt` |
 | 查詢切詞 | `composeApp/src/desktopMain/kotlin/com/neojou/mystudy/wiki/markdown/MarkdownDocs.kt` 的 `analyzeQuery` |
 | 詞彙檢索、anchor、評分 | `composeApp/src/desktopMain/kotlin/com/neojou/mystudy/wiki/ask/LexicalScore.kt` |
 | wikilink 圖、一跳擴展、hop 分數 | `composeApp/src/desktopMain/kotlin/com/neojou/mystudy/wiki/ask/LinkGraph.kt` |
@@ -139,52 +141,50 @@ Adamic–Adar 對每個共同鄰居加 `1 / ln(max(degree, 2))`。鄰居依分�
 
 ### 8. 組 prompt、檢查預算、呼叫模型
 
-`renderPacket` 組成 user 訊息。system 加 user 的字元數超過 `PromptBudget.inputCharBudget(numCtx)` 時回 `NotCalled`，訊息是頁面放不進 budget，沒有送出。
+每次呼叫前讀 `ai-prompts/ask.md`。前言與 `<!-- -->` 不送出。`renderPacket` 把問題、schema 節錄、編號頁填進檔案裡的 `{{question}}`、`{{schema}}`、`{{pages}}`。每一頁用 `page` 區段，頁與頁以一個空白行相接。
+
+檔案讀不到、缺少 `system` / `user` / `page`，或缺少必要佔位時回 `NotCalled`，沒有送出。system 加 user 的字元數超過 `PromptBudget.inputCharBudget(numCtx)` 時也回 `NotCalled`，訊息是頁面放不進 budget。
 
 過關後：
 
 ```kotlin
-client.complete(ChatRequest(ASK_SYSTEM, user, json = false))
+client.complete(ChatRequest(system, user, json = false))
 ```
 
-Ask 要的是純文字答案。Ingest 的 extract / draft 才設 `json = true`。
+Ask 要的是純文字答案。Ingest 的 extract / draft 才設 `json = true`。改 `ask.md` 不會打開 JSON。
 
 Ollama 失敗變成 `NotCalled`。成功則回 `AskResult.Answer`：答案原文、`sourcePaths`、`tokenHits`、`graphHits`、編號頁、邊。
 
 ## 送給模型的 prompt
 
-常數與組裝都在 `AskPipeline.kt`。改 Ask 行為時先改這裡。
+文字在 `ai-prompts/ask.md`。改用詞時改這個檔，存檔後下一次 Ask 生效，不用重新編譯。packet 怎麼選、schema 怎麼裁、預算怎麼算，仍在 `AskPipeline.kt`。
 
-### System：`ASK_SYSTEM`
+檔案第一個 `--- system ---` 之前是前言，不送出。`system`、`user`、`page` 三個區段才是 prompt。區段裡的 `<!-- 註解 -->` 會刪掉。
 
-```
-你只回答使用者這一個問題。用繁體中文。
-一句話只放一個主張，句末用對應編號，例如 [1]。
-不要複製頁面的標題或小標。不要用訓練記憶補內容。不要上網。
-下面的頁面沒有寫的，只回答「沒有」。
-只能使用給定的編號。不要自己寫檔名或路徑。
-```
+### System
 
-模型被限制在 packet 內。沒寫到的內容只能答「沒有」。引用用 `[1]` 這種編號，不可自己寫檔名或路徑。
+模型被限制在 packet 內。沒寫到的內容只能答「沒有」。引用用 `[1]` 這種編號，不可自己寫檔名或路徑。預設句子見 `ask.md` 的 `system` 區段。
 
-### User：`renderPacket`
+### User
 
 ```
-問題：{question}
+問題：{{question}}
 
 規則節錄（不是答案，不要引用）：
-{schema excerpt}
+{{schema}}
 
-[1] {path}
-type: {type}
-{excerpt}
-
-[2] {path}
-type: {type}
-{excerpt}
+{{pages}}
 ```
 
-規則節錄是寫作規範，不是答案來源。測試 `cardQuestionOutranksAGenericFalseFriendAndAddsOneGraphHop` 檢查 prompt 含 `規則節錄（不是答案，不要引用）：` 與 `## Frontmatter`，不含 catalog，也不含 schema 開頭那段 llm-wiki 說明。
+`page` 區段預設是：
+
+```
+[{{number}}] {{path}}
+type: {{type}}
+{{excerpt}}
+```
+
+規則節錄是寫作規範，不是答案來源。測試 `cardQuestionOutranksAGenericFalseFriendAndAddsOneGraphHop` 檢查送出的 prompt 含 `規則節錄（不是答案，不要引用）：` 與 `## Frontmatter`，不含前言、不含 catalog，也不含 schema 開頭那段 llm-wiki 說明。`{{名稱}}` 只在骨架上替換一次，頁面正文裡的佔位字樣會原樣送出。
 
 ## Ollama 連線與 budget
 

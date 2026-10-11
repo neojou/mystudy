@@ -18,6 +18,11 @@ import com.neojou.mystudy.wiki.ollama.ChatClient
 import com.neojou.mystudy.wiki.ollama.ChatRequest
 import com.neojou.mystudy.wiki.ollama.PromptBudget
 import com.neojou.mystudy.wiki.ollama.stripJsonFence
+import com.neojou.mystudy.wiki.prompt.PromptException
+import com.neojou.mystudy.wiki.prompt.PromptFile
+import com.neojou.mystudy.wiki.prompt.loadPrompt
+import com.neojou.mystudy.wiki.prompt.locateAiPrompts
+import com.neojou.mystudy.wiki.prompt.render
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonArray
@@ -26,23 +31,6 @@ import kotlinx.serialization.json.jsonPrimitive
 import java.nio.file.Path
 import java.time.LocalDate
 import kotlin.io.path.readText
-
-private val EXTRACT_SYSTEM = """
-You extract claims from one source note. Use only that note.
-Return JSON: {"claims":[{"statement":"","excerpt":"","suggestedType":"concept|entity|","suggestedTitle":"","aliases":[]}]}
-The excerpt must be copied verbatim from the note.
-Set suggestedType to concept or entity only when that idea is actually in the note. Otherwise use an empty string.
-Do not invent claims. Keep titles in the note's language.
-JSON only.
-""".trimIndent()
-
-private val DRAFT_SYSTEM = """
-You draft wiki sections from the accepted claims and the existing page excerpts. Do not add ideas that are not in the claims.
-Return JSON: {"sourceSummary":"","sourceBody":"","pages":[{"title":"","type":"concept|entity","summary":"","section":"","conflict":false,"conflictNote":"","aliases":[],"tags":[]}],"logTitle":""}
-Include one pages item for each claim whose type is concept or entity. Use that claim's title.
-Set conflict true when the claim contradicts an existing excerpt. Do not rewrite the existing page.
-JSON only.
-""".trimIndent()
 
 sealed class ExtractResult {
     data class Ok(val claims: List<Claim>) : ExtractResult()
@@ -56,17 +44,28 @@ sealed class DraftResult {
     data class Stopped(val message: String) : DraftResult()
 }
 
-class IngestPipeline(private val client: ChatClient) {
+class IngestPipeline(
+    private val client: ChatClient,
+    private val promptDirectory: Path? = null,
+) {
     fun extract(rawText: String, numCtx: Int): ExtractResult {
         if (PromptBudget.tooSmall(numCtx)) {
             return ExtractResult.Stopped("Context setting is too small. Nothing was sent.")
         }
         val budget = PromptBudget.inputCharBudget(numCtx)
-        if (rawText.length + EXTRACT_SYSTEM.length > budget) {
+        val (system, user) = try {
+            val prompt = loadActionPrompt("ingest-extract.md")
+            val system = prompt.require("system")
+            val user = render(prompt.require("user"), mapOf("raw" to rawText), prompt.fileName)
+            system to user
+        } catch (error: PromptException) {
+            return ExtractResult.Stopped(error.message ?: "Prompt file ai-prompts/ingest-extract.md could not be read. Nothing was sent.")
+        }
+        if (user.length + system.length > budget) {
             return ExtractResult.Stopped("This raw note is too big for one pass. Split it. Nothing was sent.")
         }
         val raw = try {
-            client.complete(ChatRequest(EXTRACT_SYSTEM, rawText, json = true))
+            client.complete(ChatRequest(system, user, json = true))
         } catch (error: Exception) {
             return ExtractResult.Stopped(error.message ?: "Ollama failed")
         }
@@ -96,18 +95,25 @@ class IngestPipeline(private val client: ChatClient) {
         }
         val schemaExcerpt = schema.take(PromptBudget.SCHEMA_CAP)
         val truncated = schema.length > schemaExcerpt.length
-        var existing = existingExcerpts(index, claims)
-        var user = buildDraftUser(schemaExcerpt, claims, existing)
         val budget = PromptBudget.inputCharBudget(numCtx)
-        while (DRAFT_SYSTEM.length + user.length > budget && existing.isNotEmpty()) {
-            existing = existing.dropLast(1)
-            user = buildDraftUser(schemaExcerpt, claims, existing)
-        }
-        if (DRAFT_SYSTEM.length + user.length > budget) {
-            return DraftResult.Stopped("The draft prompt does not fit. Nothing was sent.")
+        val (system, user) = try {
+            val prompt = loadActionPrompt("ingest-draft.md")
+            val systemText = prompt.require("system")
+            var existing = existingBlocks(index, claims)
+            var draftUser = buildDraftUser(prompt, schemaExcerpt, claims, existing)
+            while (systemText.length + draftUser.length > budget && existing.isNotEmpty()) {
+                existing = existing.dropLast(1)
+                draftUser = buildDraftUser(prompt, schemaExcerpt, claims, existing)
+            }
+            if (systemText.length + draftUser.length > budget) {
+                return DraftResult.Stopped("The draft prompt does not fit. Nothing was sent.")
+            }
+            systemText to draftUser
+        } catch (error: PromptException) {
+            return DraftResult.Stopped(error.message ?: "Prompt file ai-prompts/ingest-draft.md could not be read. Nothing was sent.")
         }
         val raw = try {
-            client.complete(ChatRequest(DRAFT_SYSTEM, user, json = true))
+            client.complete(ChatRequest(system, user, json = true))
         } catch (error: Exception) {
             return DraftResult.Stopped(error.message ?: "Ollama failed")
         }
@@ -136,6 +142,9 @@ class IngestPipeline(private val client: ChatClient) {
         )
         return DraftResult.Ok(proposal)
     }
+
+    private fun loadActionPrompt(fileName: String): PromptFile =
+        loadPrompt(promptDirectory ?: locateAiPrompts(), fileName)
 }
 
 fun keepVerbatim(raw: String, claims: List<Claim>): List<Claim> {
@@ -287,40 +296,72 @@ fun buildIngestProposal(
     )
 }
 
-private fun existingExcerpts(index: WikiIndex, claims: List<Claim>): List<String> {
-    val blocks = mutableListOf<String>()
+private sealed class ExistingBlock {
+    data class Page(val path: String, val title: String, val body: String) : ExistingBlock()
+
+    data class Ambiguous(val title: String, val paths: String) : ExistingBlock()
+}
+
+private fun existingBlocks(index: WikiIndex, claims: List<Claim>): List<ExistingBlock> {
+    val blocks = mutableListOf<ExistingBlock>()
     for (claim in claims) {
         if (blocks.size >= 8) break
         if (claim.suggestedType != "concept" && claim.suggestedType != "entity") continue
         when (val resolution = index.resolve(claim.suggestedTitle, claim.aliases)) {
             is Resolution.One -> {
                 val note = index.load(resolution.path) ?: continue
-                val text = note.body.take(PromptBudget.EXISTING_EXCERPT)
-                blocks += "## ${note.path}\ntitle: ${note.title}\n$text"
+                blocks += ExistingBlock.Page(note.path, note.title, note.body.take(PromptBudget.EXISTING_EXCERPT))
             }
-            is Resolution.Ambiguous -> blocks += "Ambiguous title ${claim.suggestedTitle}: ${resolution.paths.joinToString(", ")}"
+            is Resolution.Ambiguous -> blocks += ExistingBlock.Ambiguous(
+                claim.suggestedTitle,
+                resolution.paths.joinToString(", "),
+            )
             Resolution.None -> Unit
         }
     }
     return blocks
 }
 
-private fun buildDraftUser(schema: String, claims: List<Claim>, existing: List<String>): String = buildString {
-    append("## schema.md\n")
-    append(schema)
-    append("\n\n## claims\n")
-    for (claim in claims) {
-        append("- title: ")
-        append(claim.suggestedTitle)
-        append(" type: ")
-        append(claim.suggestedType)
-        append("\n  ")
-        append(claim.statement.replace("\n", " "))
-        append("\n")
+private fun buildDraftUser(
+    prompt: PromptFile,
+    schema: String,
+    claims: List<Claim>,
+    existing: List<ExistingBlock>,
+): String {
+    val claimsText = claims.joinToString("\n") { claim ->
+        render(
+            prompt.require("claim"),
+            mapOf(
+                "title" to claim.suggestedTitle,
+                "type" to claim.suggestedType,
+                "statement" to claim.statement.replace("\n", " "),
+            ),
+            prompt.fileName,
+        )
     }
-    append("\n## existing pages\n")
-    if (existing.isEmpty()) append("(none)\n")
-    existing.forEach { append(it).append("\n\n") }
+    val existingText = if (existing.isEmpty()) {
+        prompt.require("none")
+    } else {
+        existing.joinToString("\n\n") { block ->
+            when (block) {
+                is ExistingBlock.Page -> render(
+                    prompt.require("existing"),
+                    mapOf("path" to block.path, "title" to block.title, "body" to block.body),
+                    prompt.fileName,
+                )
+                is ExistingBlock.Ambiguous -> render(
+                    prompt.require("ambiguous"),
+                    mapOf("title" to block.title, "paths" to block.paths),
+                    prompt.fileName,
+                )
+            }
+        }
+    }
+    return render(
+        prompt.require("user"),
+        mapOf("schema" to schema, "claims" to claimsText, "existing" to existingText),
+        prompt.fileName,
+    )
 }
 
 private fun allocatePath(

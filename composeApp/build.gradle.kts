@@ -1,5 +1,8 @@
 // Desktop JVM only. Do not add Android, iOS, or Web targets.
 
+import org.gradle.api.tasks.JavaExec
+import org.gradle.api.tasks.Sync
+
 plugins {
     alias(libs.plugins.kotlinMultiplatform)
     alias(libs.plugins.composeMultiplatform)
@@ -70,4 +73,20 @@ compose.desktop {
 
 compose.resources {
     packageOfResClass = appGroup
+}
+
+// `run` starts in the repo root so the process finds the editable ai-prompts/ directory.
+// prepareAppResources copies that directory into the packaged app. Gradle `run` still
+// prefers the repo copy, because prompt lookup walks the working directory first.
+tasks.withType<JavaExec>().configureEach {
+    if (name == "run") {
+        workingDir = rootProject.projectDir
+    }
+}
+tasks.withType<Sync>().configureEach {
+    if (name == "prepareAppResources") {
+        from(rootProject.layout.projectDirectory.dir("ai-prompts")) {
+            into("ai-prompts")
+        }
+    }
 }
