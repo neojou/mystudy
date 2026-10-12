@@ -1,9 +1,11 @@
 package com.neojou.mystudy.wiki.vault
 
 import com.neojou.mystudy.wiki.markdown.appendLog
+import com.neojou.mystudy.wiki.markdown.appendReviews
 import com.neojou.mystudy.wiki.markdown.insertCatalogLine
 import com.neojou.mystudy.wiki.model.ApplyResult
 import com.neojou.mystudy.wiki.model.PageProposal
+import com.neojou.mystudy.wiki.model.ReviewProposal
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
@@ -12,8 +14,9 @@ import kotlin.io.path.exists
 import kotlin.io.path.readText
 
 /**
- * Writes checked pages, then index.md, then log.md.
+ * Writes checked pages, then index.md, then log.md, then checked reviews.
  * A failure stops the rest. [ApplyResult.written] lists files that already landed.
+ * Ask and Chat pass an empty review list, so they do not create `wiki/review.md`.
  */
 fun applyProposal(
     wikiRoot: Path,
@@ -22,9 +25,13 @@ fun applyProposal(
     logTitle: String,
     operation: String,
     date: LocalDate,
+    reviews: List<ReviewProposal> = emptyList(),
+    checkedReviews: Set<String> = emptySet(),
+    reviewSource: String = "",
 ): ApplyResult {
     val active = pages.filter { it.selectable && it.relativePath in checked }
-    if (active.isEmpty()) return ApplyResult(emptyList(), null)
+    val activeReviews = reviews.filter { it.id in checkedReviews }
+    if (active.isEmpty() && activeReviews.isEmpty()) return ApplyResult(emptyList(), null)
     val written = mutableListOf<String>()
     for (page in active) {
         val failed = writeOne(wikiRoot, page.relativePath, page.newText)
@@ -45,11 +52,19 @@ fun applyProposal(
     }
     val logPath = wikiRoot.resolve("wiki").resolve("log.md")
     val currentLog = if (logPath.exists()) logPath.readText(StandardCharsets.UTF_8) else "# Log\n"
-    val details = active.map { it.relativePath }
+    val details = active.map { it.relativePath } + if (activeReviews.isNotEmpty()) listOf("wiki/review.md") else emptyList()
     val updatedLog = appendLog(currentLog, date, operation, logTitle.ifBlank { "untitled" }, details)
-    val failed = writeOne(wikiRoot, "wiki/log.md", updatedLog)
-    if (failed != null) return ApplyResult(written, failed)
+    val logFailed = writeOne(wikiRoot, "wiki/log.md", updatedLog)
+    if (logFailed != null) return ApplyResult(written, logFailed)
     written += "wiki/log.md"
+    if (activeReviews.isNotEmpty()) {
+        val reviewPath = wikiRoot.resolve("wiki").resolve("review.md")
+        val currentReview = if (reviewPath.exists()) reviewPath.readText(StandardCharsets.UTF_8) else ""
+        val updatedReview = appendReviews(currentReview, date, activeReviews, reviewSource)
+        val reviewFailed = writeOne(wikiRoot, "wiki/review.md", updatedReview)
+        if (reviewFailed != null) return ApplyResult(written, reviewFailed)
+        written += "wiki/review.md"
+    }
     return ApplyResult(written, null)
 }
 

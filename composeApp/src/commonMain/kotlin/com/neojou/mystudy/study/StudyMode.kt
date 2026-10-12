@@ -7,7 +7,6 @@ enum class StudyMode {
     Home,
     Browse,
     Chat,
-    Ingest,
     Ask,
     Settings,
 }

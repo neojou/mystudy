@@ -53,7 +53,7 @@ Top Menu 的 `Wiki → Chat` 把畫面切到 `StudyMode.Chat`。Ask (keyword) �
 Agent 決定 query。工具不再用 Lexical Ask 的 `analyzeQuery`（那會把「和」切掉）。這裡只為這次 query 做三件事：
 
 1. 以空白與標點切開，不以「是的了在有和」切開。只剝開頭或結尾的請求語，所以 `請介紹植田和男` 變成 run `植田和男`。句中的「介紹」「和」不剝。不產生單字 token。
-2. `exactNameHits`：run 的子字串由長到短，向 `pathsForLooseAlias` 查完全相等（title、alias、檔名 stem、去括號 title）。被更長命中包住的短詞丟掉。`raw/`、`index.md`、`log.md`、`schema.md` 不要。nameHit 頁一定進候選池，分數 +200。
+2. `exactNameHits`：run 的子字串由長到短，向 `pathsForLooseAlias` 查完全相等（title、alias、檔名 stem、去括號 title）。被更長命中包住的短詞丟掉。`raw/`、`index.md`、`log.md`、`schema.md`、`review.md` 不要。nameHit 頁一定進候選池，分數 +200。
 3. 其餘 term 用既有 `searchAskTerm` 與長度 ≥ 3 的 FTS。高頻詞（`countAskTerm / askNoteCount > 0.20`，且不是 nameHit key）那個 term 的分數 ×0.1。只命中高頻詞的頁丟掉。
 
 排序是分數、`pathRank`、路徑。前 5 筆是關鍵字結果。再以前 3 名走既有 `expandOneHop`，最多 2 個鄰居接在後面，不插進前 5。圖鄰居的 snippet 是 `Graph neighbor of {標題}. ` 再接該頁正文節錄。`vectorHits` 固定 0。有圖鄰居時 `mode=hybrid`。
@@ -74,7 +74,7 @@ Agent 決定 query。工具不再用 Lexical Ask 的 `analyzeQuery`（那會把�
 
 ## wiki.read_page
 
-從索引 `load`，不直接讀檔。正文從頁首取最多 4000 字，後面加一行 `連結：`（鄰居標題與 frontmatter `sources`）。接受 `wiki/…​.md`、引用編號 `[1]`、唯一的 title。拒絕絕對路徑、`..`、`raw/`、`wiki/index.md`、`wiki/log.md`、`wiki/schema.md`。拒絕寫在觀察裡，不丟例外。
+從索引 `load`，不直接讀檔。正文從頁首取最多 4000 字，後面加一行 `連結：`（鄰居標題與 frontmatter `sources`）。接受 `wiki/…​.md`、引用編號 `[1]`、唯一的 title。拒絕絕對路徑、`..`、`raw/`、`wiki/index.md`、`wiki/log.md`、`wiki/schema.md`、`wiki/review.md`。拒絕寫在觀察裡，不丟例外。
 
 沒有寫入工具。File this answer 仍走 `proposeQueryFile` 與既有寫入對話框。存檔來源是答案裡的 `[n]`；沒有編號時改用這一回合讀過的頁。不會把沒引用也沒讀的搜尋命中寫進去。
 

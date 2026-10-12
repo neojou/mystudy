@@ -168,7 +168,7 @@ fun searchAskTerm(term: String, limit: Int): List<String> {
         """
         SELECT path FROM notes
         WHERE path LIKE 'wiki/%'
-          AND path NOT IN ('wiki/index.md', 'wiki/log.md', 'wiki/schema.md')
+          AND path NOT IN ('wiki/index.md', 'wiki/log.md', 'wiki/schema.md', 'wiki/review.md')
           AND (title LIKE ? ESCAPE '\' OR body LIKE ? ESCAPE '\' OR headings_json LIKE ? ESCAPE '\')
         ORDER BY CASE
             WHEN title LIKE ? ESCAPE '\' THEN 0
@@ -276,7 +276,7 @@ fun searchLike(term: String, limit: Int): List<String> {
                 SELECT path, title, type, headings_json, body, frontmatter_json, content_hash, frontmatter_unparsed
                 FROM notes
                 WHERE path LIKE 'wiki/%'
-                  AND path NOT IN ('wiki/index.md', 'wiki/log.md', 'wiki/schema.md')
+                  AND path NOT IN ('wiki/index.md', 'wiki/log.md', 'wiki/schema.md', 'wiki/review.md')
                 ORDER BY path
                 """.trimIndent(),
             ).use { rows ->
@@ -302,7 +302,7 @@ fun searchLike(term: String, limit: Int): List<String> {
                 """
                 SELECT COUNT(*) FROM notes
                 WHERE path LIKE 'wiki/%'
-                  AND path NOT IN ('wiki/index.md', 'wiki/log.md', 'wiki/schema.md')
+                  AND path NOT IN ('wiki/index.md', 'wiki/log.md', 'wiki/schema.md', 'wiki/review.md')
                 """.trimIndent(),
             ).use { rows ->
                 return if (rows.next()) rows.getInt(1) else 0
@@ -316,7 +316,7 @@ fun searchLike(term: String, limit: Int): List<String> {
             """
             SELECT COUNT(*) FROM notes
             WHERE path LIKE 'wiki/%'
-              AND path NOT IN ('wiki/index.md', 'wiki/log.md', 'wiki/schema.md')
+              AND path NOT IN ('wiki/index.md', 'wiki/log.md', 'wiki/schema.md', 'wiki/review.md')
               AND (title LIKE ? ESCAPE '\' OR body LIKE ? ESCAPE '\' OR headings_json LIKE ? ESCAPE '\')
             """.trimIndent(),
         ).use { statement ->

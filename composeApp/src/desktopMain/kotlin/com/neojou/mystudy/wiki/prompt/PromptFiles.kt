@@ -25,7 +25,7 @@ class PromptFile(
 
 class PromptException(message: String) : Exception(message)
 
-private val promptFileNames = listOf("ask.md", "ingest-extract.md", "ingest-draft.md")
+private val promptFileNames = listOf("ask.md", "ingest-analyze.md", "ingest-generate.md")
 private val sectionMarker = Regex("""^---\s+([a-z0-9-]+)\s+---\s*$""")
 private val htmlComment = Regex("""<!--.*?-->""", RegexOption.DOT_MATCHES_ALL)
 private val placeholder = Regex("""\{\{([A-Za-z][A-Za-z0-9_]*)\}\}""")

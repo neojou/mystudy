@@ -15,8 +15,15 @@ data class ScoredNote(
     val canSeed: Boolean,
 )
 
+private val blockedWikiPaths = setOf(
+    "wiki/index.md",
+    "wiki/log.md",
+    "wiki/schema.md",
+    "wiki/review.md",
+)
+
 fun includedAskPath(path: String): Boolean = when {
-    path == "wiki/index.md" || path == "wiki/log.md" || path == "wiki/schema.md" -> false
+    path in blockedWikiPaths -> false
     path.startsWith("raw/") -> false
     path.startsWith("wiki/") -> true
     else -> false
@@ -31,7 +38,7 @@ fun scoreNote(
     anchors: List<String> = emptyList(),
 ): ScoredNote? {
     if (!allowRaw && !includedAskPath(note.path)) return null
-    if (note.path == "wiki/index.md" || note.path == "wiki/log.md" || note.path == "wiki/schema.md") return null
+    if (note.path in blockedWikiPaths) return null
     val names = listOf(note.title) + note.aliases
     val tokens = analysis.bigrams + analysis.extras
     val phrase = analysis.phrase

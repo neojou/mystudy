@@ -159,7 +159,7 @@ Adamic–Adar 對每個共同鄰居加 `1 / ln(max(degree, 2))`。鄰居依分�
 client.complete(ChatRequest(system, user, json = false))
 ```
 
-Ask 要的是純文字答案。Ingest 的 extract / draft 才設 `json = true`。改 `ask.md` 不會打開 JSON。
+Ask 要的是純文字答案。Ingest 的 Analyze / Generate 也是 `json = false`。Chat Agent 才設 `json = true`。改 `ask.md` 不會打開 JSON。
 
 Ollama 失敗變成 `NotCalled`。成功則回 `AskResult.Answer`：答案原文、`sourcePaths`、`tokenHits`、`graphHits`、編號頁、邊。
 

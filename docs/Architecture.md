@@ -2,7 +2,7 @@
 
 mystudy 是桌面 Compose 應用。它對本機 Obsidian vault 做 llm-wiki 式筆記，回答與起草都走本機 Ollama。
 
-對齊的是 [llm-wiki](https://github.com/nashsu/llm_wiki) 的目錄與兩段式匯入。這裡沒有移植 FILE block、purpose.md、overview.md、embedding、多模態或持久佇列。
+對齊的是 [llm-wiki](https://github.com/nashsu/llm_wiki) 的目錄與兩段式匯入。預覽 Ingest 走 Analysis 再 Generation，模型輸出 FILE / REVIEW 區塊，本地解析後才寫。沒有移植 embedding、多模態、持久佇列、分塊或 Deep Research。預覽 Ingest 不建 `raw/sources` symlink。
 
 ## 目標平台
 
@@ -17,14 +17,14 @@ mystudy 是桌面 Compose 應用。它對本機 Obsidian vault 做 llm-wiki 式�
 | `composeApp/src/commonMain/kotlin/com/neojou/mystudy/` | `App`、`HomeScreen`、`StudyMode`、主題、`AppVersion` |
 | `composeApp/src/commonMain/kotlin/com/neojou/tools/` | 日誌、`SystemSettings`、上方選單。這不是產品套件，改名時不動 |
 | `composeApp/src/desktopMain/kotlin/com/neojou/mystudy/` | `Main`、`StudyController`、畫面、整個 `wiki/` |
-| `composeApp/src/desktopTest/` | `WikiBehaviorTest`、`ChatAgentBehaviorTest`。檢索、prompt 形狀、寫入守衛、Chat 工具迴圈的契約在這裡 |
+| `composeApp/src/desktopTest/` | `WikiBehaviorTest`、`IngestBehaviorTest`、`ChatAgentBehaviorTest`。檢索、prompt 形狀、寫入守衛、Ingest、Chat 工具迴圈的契約在這裡 |
 | `ai-prompts/` | 送給模型的 prompt。一個動作一個檔 |
 
 `wiki/` 再分成 agent、ask、ingest、index、markdown、model、ollama、prompt、settings、vault。`wiki/agent/` 是 Chat Agent（協定、`wiki.search`、`wiki.read_page`、迴圈）。檔案系統、SQLite、Ollama 都在 desktopMain，因為它們用的是本機 JVM API。`StudyMode` 在 commonMain。
 
 ## 畫面與狀態
 
-`StudyMode` 有 Home、Browse、Chat、Ingest、Ask、Settings。Wiki 選單順序是 Browse、Chat、Ask (keyword)。Settings 是上方獨立項目。預覽區的 Ingest 按鈕留在 Home，不在 Wiki 選單裡。`StudyMode.Ingest` 與 `IngestPane` 仍在，預覽流程不會切過去。
+`StudyMode` 有 Home、Browse、Chat、Ask、Settings。Wiki 選單順序是 Browse、Chat、Ask (keyword)。Settings 是上方獨立項目。預覽區的 Ingest 按鈕留在 Home，不在 Wiki 選單裡。沒有 Ingest 模式，也沒有 `IngestPane`。
 
 `HomeScreen` 左上角打開檔案樹，預設是開的。樹沒有右鍵選單：Compose 的 `ContextMenuArea` 會和列上的點擊搶同一下 pointer down。動作放在預覽區按鈕。樹根標籤用 vault 路徑的最後一段；Settings 顯示完整路徑。
 
@@ -37,11 +37,10 @@ mystudy 是桌面 Compose 應用。它對本機 Obsidian vault 做 llm-wiki 式�
   → StudyController
       → Chat：ChatAgent ⇄ WikiTools（WikiSearch / read_page）→ ai-prompts/chat-agent.md → OllamaClient
       → Ask：WikiIndex 本地檢索 → AskPipeline → ai-prompts/ask.md → OllamaClient
-      → 預覽 Ingest：linkIntoRawSource（只建 symlink）
-      → Extract / Draft：IngestPipeline → ai-prompts/ingest-*.md → OllamaClient
+      → 預覽 Ingest：IngestPipeline（Analyze → Generate）→ 確認對話框 → applyProposal
 ```
 
-Chat 的工具迴圈、hybrid search 與預算在 `docs/programming/How-To-do-wiki-Chat.md`。Ask 的步驟、切詞與 packet 在 `docs/programming/How-To-do-wiki-Ask.md`。Ingest 的 symlink、Extract、Draft 在 `docs/programming/How-To-do-Ingest.md`。
+Chat 的工具迴圈、hybrid search 與預算在 `docs/programming/How-To-do-wiki-Chat.md`。Ask 的步驟、切詞與 packet 在 `docs/programming/How-To-do-wiki-Ask.md`。Ingest 的兩次呼叫、路徑守衛與確認寫入在 `docs/programming/How-To-do-Ingest.md`。模型呼叫在 IO。Ingest 讀索引時才回到 `wiki-index`。
 
 ## Vault、wiki root、來源
 
@@ -53,13 +52,13 @@ Wiki root 是同時有 `raw/` 目錄與 `wiki/index.md` 的目錄。它可以是
 
 Vault 裡與 `wiki/`、`raw/` 並列的筆記，例如 `Zettelkasten/`，不是 wiki 頁。`isWikiManagedPath` 只含 `{wikiRoot}/wiki/` 與 `{wikiRoot}/raw/`。判斷用 lexical 路徑，所以 `raw/sources/` 裡指向庫外原文的 symlink 仍算受管。
 
-Wiki 頁在 `{wikiRoot}/wiki/`（sources、concepts、entities、queries、index.md、log.md、schema.md）。來源 link 在 `{wikiRoot}/raw/sources/`。
+Wiki 頁在 `{wikiRoot}/wiki/`（sources、concepts、entities、queries、index.md、log.md、schema.md、review.md）。`raw/sources/` 仍是 scaffold 留下的目錄。預覽 Ingest 不在那裡建 link。
 
 ## 寫入邊界
 
-`assertWikiWrite` 只允許寫 wiki 頁、`wiki/index.md` 與 `wiki/log.md`。`wiki/schema.md` 不能從這條路改。`raw/` 不能覆寫。
+`assertWikiWrite` 只允許寫 wiki 頁、`wiki/index.md`、`wiki/log.md` 與 `wiki/review.md`。`wiki/schema.md` 不能從這條路改。`raw/` 不能覆寫。
 
-新的來源 link 走 `assertNewRawFile`：只能新建 `raw/sources/` 底下的單一檔名，目的地已存在就拒絕。預覽 Ingest 只做這件事，不複製、不移動原文。Extract 與 Draft 不會被這個按鈕呼叫。
+`assertNewRawFile` 仍只允許新建 `raw/sources/` 底下的單一檔名，目的地已存在就拒絕。`linkIntoRawSource` 還在，預覽 Ingest 不呼叫它。確認前這條流程不寫磁碟。
 
 ## 索引、偏好、Ollama
 
@@ -71,6 +70,6 @@ Ollama 主機必須是 `127.0.0.1` 或 `localhost`。客戶端拿掉 URL 的 `/v
 
 ## Prompt
 
-送給模型的文字在 `ai-prompts/`，一個動作一個檔：`ask.md`、`chat-agent.md`、`ingest-extract.md`、`ingest-draft.md`。程式每次呼叫前讀檔。第一個區段標記之前的前言，以及區段裡的 `<!-- -->`，不送給模型。格式與佔位見 `ai-prompts/README.md`。
+送給模型的文字在 `ai-prompts/`，一個動作一個檔：`ask.md`、`chat-agent.md`、`ingest-analyze.md`、`ingest-generate.md`。程式每次呼叫前讀檔。第一個區段標記之前的前言，以及區段裡的 `<!-- -->`，不送給模型。格式與佔位見 `ai-prompts/README.md`。
 
-Lexical Ask 的 `json` 是 false。Extract、Draft、Chat Agent 的 `json` 是 true，這個旗標在程式裡，不在 prompt 檔。Extract / Draft 的 JSON 欄位名是 `parseClaims` 與 draft 解析讀的名字。Chat Agent 的欄位是 `action`、`tool`、`query`、`path`、`answer`，工具名是 `wiki.search`、`wiki.read_page`。改掉這些名字會讓該輪停下、不寫檔。
+Lexical Ask 與 Ingest 的 `json` 是 false。Chat Agent 的 `json` 是 true，這個旗標在程式裡，不在 prompt 檔。Ingest 的解析契約是 FILE / REVIEW 標記，以及 `OPTIONS:`、`SEARCH:`。Chat Agent 的欄位是 `action`、`tool`、`query`、`path`、`answer`，工具名是 `wiki.search`、`wiki.read_page`。改掉這些名字會讓該輪停下、不寫檔。

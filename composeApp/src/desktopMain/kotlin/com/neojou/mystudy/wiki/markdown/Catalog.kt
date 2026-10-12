@@ -1,5 +1,6 @@
 package com.neojou.mystudy.wiki.markdown
 
+import com.neojou.mystudy.wiki.model.ReviewProposal
 import java.time.LocalDate
 
 fun catalogLine(linkTarget: String, summary: String, type: String, sources: List<String>): String {
@@ -73,6 +74,50 @@ fun appendLog(
         else -> newline + newline
     }
     return existing + gap + entry
+}
+
+/**
+ * Appends ingest REVIEW entries. A missing file starts with a `# Review` heading.
+ */
+fun appendReviews(
+    existing: String,
+    date: LocalDate,
+    reviews: List<ReviewProposal>,
+    source: String,
+): String {
+    val newline = if (existing.contains("\r\n")) "\r\n" else "\n"
+    val base = if (existing.isBlank()) "# Review$newline" else existing
+    val entry = buildString {
+        for (review in reviews) {
+            append("## [")
+            append(date)
+            append("] ")
+            append(review.type)
+            append(" | ")
+            append(review.title.trim())
+            append(newline)
+            append(newline)
+            val body = review.body.trim()
+            if (body.isNotEmpty()) {
+                append(body)
+                append(newline)
+                append(newline)
+            }
+            if (source.isNotBlank()) {
+                append("- source: ")
+                append(source)
+                append(newline)
+            }
+            append(newline)
+        }
+    }
+    if (base.isEmpty()) return entry
+    val gap = when {
+        base.endsWith(newline + newline) -> ""
+        base.endsWith(newline) -> newline
+        else -> newline + newline
+    }
+    return base + gap + entry
 }
 
 fun schemaCompatibilityWarning(schema: String): String? {

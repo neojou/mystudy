@@ -27,6 +27,7 @@ import androidx.compose.ui.window.Dialog
 import com.neojou.mystudy.wiki.markdown.unifiedDiff
 import com.neojou.mystudy.wiki.model.DraftProposal
 import com.neojou.mystudy.wiki.model.defaultChecked
+import com.neojou.mystudy.wiki.model.defaultCheckedReviews
 
 @Composable
 fun CreateWikiDialog(onConfirm: () -> Unit, onDismiss: () -> Unit) {
@@ -70,10 +71,13 @@ fun RootChoiceDialog(
 @Composable
 fun ConfirmWriteDialog(
     proposal: DraftProposal,
-    onWrite: (Set<String>) -> Unit,
+    onWrite: (Set<String>, Set<String>) -> Unit,
     onDismiss: () -> Unit,
 ) {
     var checked by remember(proposal) { mutableStateOf(defaultChecked(proposal.pages)) }
+    var checkedReviews by remember(proposal) { mutableStateOf(defaultCheckedReviews(proposal.reviews)) }
+    val pagesOn = proposal.pages.any { it.selectable && it.relativePath in checked }
+    val reviewsOn = proposal.reviews.any { it.id in checkedReviews }
     Dialog(onDismissRequest = onDismiss) {
         Surface(shape = MaterialTheme.shapes.large) {
             Column(
@@ -88,6 +92,12 @@ fun ConfirmWriteDialog(
                     "Checked pages also update wiki/index.md and append wiki/log.md.",
                     style = MaterialTheme.typography.bodySmall,
                 )
+                if (proposal.reviews.isNotEmpty()) {
+                    Text(
+                        "Checked reviews append to wiki/review.md.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
                 proposal.schemaWarning?.let { warning ->
                     Text(warning, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                 }
@@ -97,7 +107,13 @@ fun ConfirmWriteDialog(
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }
+                proposal.warnings.forEach { warning ->
+                    Text(warning, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                }
                 Column(Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState())) {
+                    if (proposal.pages.isNotEmpty()) {
+                        Text("Pages", style = MaterialTheme.typography.titleSmall)
+                    }
                     proposal.pages.forEach { page ->
                         Row(verticalAlignment = Alignment.Top) {
                             Checkbox(
@@ -111,8 +127,7 @@ fun ConfirmWriteDialog(
                                 Text(page.relativePath, style = MaterialTheme.typography.titleSmall)
                                 if (page.note.isNotBlank()) {
                                     Text(page.note, style = MaterialTheme.typography.bodySmall)
-                                }
-                                if (!page.selectable) {
+                                } else if (!page.selectable) {
                                     Text("This title matches more than one page. It will not be written.")
                                 } else if (page.conflict) {
                                     Text("Conflict. Checking this appends a section and does not replace the page.")
@@ -124,11 +139,40 @@ fun ConfirmWriteDialog(
                             }
                         }
                     }
+                    if (proposal.reviews.isNotEmpty()) {
+                        Text("Reviews", style = MaterialTheme.typography.titleSmall)
+                    }
+                    proposal.reviews.forEach { review ->
+                        Row(verticalAlignment = Alignment.Top) {
+                            Checkbox(
+                                checked = review.id in checkedReviews,
+                                onCheckedChange = { on ->
+                                    checkedReviews = if (on) checkedReviews + review.id else checkedReviews - review.id
+                                },
+                            )
+                            Column(Modifier.padding(bottom = 12.dp)) {
+                                Text("${review.type} | ${review.title}", style = MaterialTheme.typography.titleSmall)
+                                if (review.options.isNotEmpty()) {
+                                    Text(
+                                        "OPTIONS: ${review.options.joinToString(" | ")}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                    )
+                                }
+                                review.searches.forEach { search ->
+                                    Text("SEARCH: $search", style = MaterialTheme.typography.bodySmall)
+                                }
+                                val preview = reviewBodyPreview(review.body)
+                                if (preview.isNotBlank()) {
+                                    Text(preview, style = MaterialTheme.typography.bodySmall)
+                                }
+                            }
+                        }
+                    }
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(
-                        onClick = { onWrite(checked) },
-                        enabled = proposal.pages.any { it.selectable && it.relativePath in checked },
+                        onClick = { onWrite(checked, checkedReviews) },
+                        enabled = pagesOn || reviewsOn,
                     ) { Text("Write") }
                     TextButton(onClick = onDismiss) { Text("Cancel") }
                 }
@@ -136,3 +180,12 @@ fun ConfirmWriteDialog(
         }
     }
 }
+
+private fun reviewBodyPreview(body: String): String = body.lineSequence()
+    .filter { line ->
+        val trimmed = line.trim()
+        !trimmed.startsWith("OPTIONS:") && !trimmed.startsWith("SEARCH:")
+    }
+    .take(12)
+    .joinToString("\n")
+    .trim()

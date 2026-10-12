@@ -20,13 +20,12 @@ import com.neojou.mystudy.wiki.index.NoteSummary
 import com.neojou.mystudy.wiki.index.WikiIndex
 import com.neojou.mystudy.wiki.index.WikiWatcher
 import com.neojou.mystudy.wiki.index.indexDatabasePath
-import com.neojou.mystudy.wiki.ingest.DraftResult
-import com.neojou.mystudy.wiki.ingest.ExtractResult
+import com.neojou.mystudy.wiki.ingest.IngestInput
 import com.neojou.mystudy.wiki.ingest.IngestPipeline
-import com.neojou.mystudy.wiki.model.Claim
+import com.neojou.mystudy.wiki.ingest.IngestResult
+import com.neojou.mystudy.wiki.ingest.vaultRelative
 import com.neojou.mystudy.wiki.model.DraftProposal
 import com.neojou.mystudy.wiki.ollama.OllamaClient
-import com.neojou.mystudy.wiki.ollama.PromptBudget
 import com.neojou.mystudy.wiki.settings.AppSettings
 import com.neojou.mystudy.wiki.settings.SettingsStore
 import com.neojou.mystudy.wiki.settings.StudySettings
@@ -34,10 +33,9 @@ import com.neojou.mystudy.wiki.vault.Discovery
 import com.neojou.mystudy.wiki.vault.applyProposal
 import com.neojou.mystudy.wiki.vault.discoverWikiRoot
 import com.neojou.mystudy.wiki.vault.ingestTargets
-import com.neojou.mystudy.wiki.vault.listMarkdownUnder
 import com.neojou.mystudy.wiki.vault.readCapped
+import com.neojou.mystudy.wiki.vault.readTextIfExists
 import com.neojou.mystudy.wiki.vault.scaffoldWiki
-import com.neojou.mystudy.wiki.vault.linkIntoRawSource
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -52,6 +50,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import java.nio.file.Files
 import java.nio.file.Path
+import kotlin.io.path.readText
 import java.time.LocalDate
 import java.util.concurrent.Executors
 import kotlin.io.path.isDirectory
@@ -60,11 +59,6 @@ data class ChatBubble(
     val question: String,
     val steps: List<String>,
     val answer: String,
-)
-
-data class ClaimChoice(
-    val claim: Claim,
-    val checked: Boolean,
 )
 
 /**
@@ -113,17 +107,7 @@ class StudyController(
     var previewBody by mutableStateOf("")
         private set
 
-    var rawFiles by mutableStateOf<List<String>>(emptyList())
-        private set
-    var selectedRaw by mutableStateOf<String?>(null)
-        private set
-    var rawPreview by mutableStateOf("")
-        private set
-    var claims by mutableStateOf<List<ClaimChoice>>(emptyList())
-        private set
     var ingestMessage by mutableStateOf("")
-        private set
-    var queue by mutableStateOf<List<String>>(emptyList())
         private set
 
     var question by mutableStateOf("")
@@ -187,6 +171,8 @@ class StudyController(
     private val chatSession = ChatSession()
     private var chatJob: Job? = null
     private var chatGeneration = 0
+    private var ingestJob: Job? = null
+    private var ingestGeneration = 0
     private var chatQuestion = ""
     private var chatAnswer = ""
     private var chatSources = emptyList<String>()
@@ -379,9 +365,13 @@ class StudyController(
     }
 
     fun previewFile(path: Path) {
+        val cancelIngest = ingestJob?.isActive == true
+        ingestGeneration += 1
+        ingestJob?.cancel()
+        if (cancelIngest) busy = false
+        proposal = null
         previewPath = path
         previewTitle = path.fileName?.toString() ?: path.toString()
-        claims = emptyList()
         ingestMessage = ""
         pendingMode = StudyMode.Home
         scope.launch {
@@ -410,102 +400,67 @@ class StudyController(
             return
         }
         val source = targets.first()
-        scope.launch {
+        val generation = ++ingestGeneration
+        val vault = Path.of(settings.vaultPath)
+        ingestJob = scope.launch {
             busy = true
-            ingestMessage = "Linking into raw/sources/…"
+            ingestMessage = "Analyzing…"
             try {
-                val staged = withContext(Dispatchers.IO) {
-                    linkIntoRawSource(Path.of(root), source)
+                val result = withContext(Dispatchers.IO) {
+                    runIngest(Path.of(root), vault, source) { stage ->
+                        scope.launch {
+                            if (generation == ingestGeneration) ingestMessage = stage
+                        }
+                    }
                 }
-                queue = listOf(staged.relativePath)
-                rawFiles = withContext(Dispatchers.IO) { listMarkdownUnder(Path.of(root), "raw") }
-                treeTick += 1
-                selectedRaw = staged.relativePath
-                claims = emptyList()
-                ingestMessage = if (staged.created) {
-                    "Linked into ${staged.relativePath}."
-                } else {
-                    "Already linked at ${staged.relativePath}."
-                }
-            } catch (caught: Exception) {
-                ingestMessage = caught.message ?: "Ingest failed."
-            } finally {
-                busy = false
-            }
-        }
-    }
-
-    fun selectRaw(relative: String) {
-        selectedRaw = relative
-        claims = emptyList()
-        val root = wikiRoot ?: return
-        scope.launch {
-            rawPreview = withContext(Dispatchers.IO) { readPreview(Path.of(root).resolve(relative)) }
-        }
-    }
-
-    fun setClaimChecked(index: Int, checked: Boolean) {
-        claims = claims.mapIndexed { item, choice ->
-            if (item == index) choice.copy(checked = checked) else choice
-        }
-    }
-
-    fun extractClaims() {
-        val relative = selectedRaw ?: run {
-            ingestMessage = "Choose a raw note."
-            return
-        }
-        if (wikiRoot == null) return
-        scope.launch {
-            busy = true
-            try {
-                extractSelected(relative)
-            } catch (caught: Exception) {
-                ingestMessage = caught.message ?: "Extract failed."
-            } finally {
-                busy = false
-            }
-        }
-    }
-
-    private suspend fun extractSelected(relative: String) {
-        val root = wikiRoot ?: return
-        val text = withContext(Dispatchers.IO) {
-            readCapped(Path.of(root).resolve(relative), PromptBudget.inputCharBudget(settings.ollamaNumCtx))
-        }
-        if (text.truncated) {
-            ingestMessage = "This raw note is too big for one pass. Split it. Nothing was sent."
-            return
-        }
-        when (val result = withContext(Dispatchers.IO) { IngestPipeline(client()).extract(text.text, settings.ollamaNumCtx) }) {
-            is ExtractResult.Ok -> {
-                claims = result.claims.map { ClaimChoice(it, checked = true) }
-                ingestMessage = "${result.claims.size} claims. Uncheck any you do not want."
-            }
-            is ExtractResult.Stopped -> ingestMessage = result.message
-        }
-    }
-
-    fun draftClaims() {
-        val relative = selectedRaw ?: return
-        val accepted = claims.filter { it.checked }.map { it.claim }
-        scope.launch {
-            busy = true
-            try {
-                val result = withContext(dbDispatcher) {
-                    val current = index ?: return@withContext DraftResult.Stopped("Index is not open.")
-                    IngestPipeline(client()).draft(current, relative, accepted, settings.ollamaNumCtx, LocalDate.now())
-                }
+                if (generation != ingestGeneration) return@launch
                 when (result) {
-                    is DraftResult.Ok -> proposal = result.proposal
-                    is DraftResult.Stopped -> ingestMessage = result.message
+                    is IngestResult.Proposal -> {
+                        proposal = result.proposal
+                        ingestMessage = "Confirm the pages before anything is written."
+                    }
+                    is IngestResult.Stopped -> ingestMessage = result.message
                 }
+            } catch (cancel: CancellationException) {
+                throw cancel
             } catch (caught: Exception) {
-                ingestMessage = caught.message ?: "Draft failed."
+                if (generation == ingestGeneration) ingestMessage = caught.message ?: "Ingest failed."
             } finally {
-                busy = false
+                if (generation == ingestGeneration) busy = false
             }
         }
+    }
+
+    private fun runIngest(
+        root: Path,
+        vault: Path,
+        source: Path,
+        onStage: (String) -> Unit,
+    ): IngestResult {
+        val current = index ?: return IngestResult.Stopped("Index is not open.")
+        val input = IngestInput(
+            sourceName = source.fileName?.toString() ?: source.toString(),
+            sourcePath = vaultRelative(vault, source),
+            rawText = source.readText(),
+            schema = readTextIfExists(root.resolve("wiki").resolve("schema.md")).orEmpty(),
+            purpose = readTextIfExists(root.resolve("wiki").resolve("purpose.md")),
+            indexText = readTextIfExists(root.resolve("wiki").resolve("index.md")).orEmpty(),
+            overview = readTextIfExists(root.resolve("wiki").resolve("overview.md")),
+            numCtx = settings.ollamaNumCtx,
+            today = LocalDate.now(),
+            resolve = { title, aliases ->
+                runBlocking(dbDispatcher) { current.resolve(title, aliases) }
+            },
+            read = { relative -> readTextIfExists(root.resolve(relative)) },
+            findSource = { raw ->
+                runBlocking(dbDispatcher) { current.findSourceForRaw(raw) }
+            },
+            exists = { relative ->
+                runBlocking(dbDispatcher) { current.noteExists(relative) } ||
+                    Files.isRegularFile(root.resolve(relative))
+            },
+        )
+        return IngestPipeline(client()).ingest(input, onStage)
     }
 
     fun ask() {
@@ -765,7 +720,7 @@ class StudyController(
         }
     }
 
-    fun confirmWrites(checked: Set<String>) {
+    fun confirmWrites(checked: Set<String>, checkedReviews: Set<String> = emptySet()) {
         val draft = proposal ?: return
         proposal = null
         val root = wikiRoot ?: return
@@ -773,7 +728,17 @@ class StudyController(
             busy = true
             try {
                 val result = withContext(Dispatchers.IO) {
-                    applyProposal(Path.of(root), draft.pages, checked, draft.logTitle, draft.operation, LocalDate.now())
+                    applyProposal(
+                        Path.of(root),
+                        draft.pages,
+                        checked,
+                        draft.logTitle,
+                        draft.operation,
+                        LocalDate.now(),
+                        draft.reviews,
+                        checkedReviews,
+                        draft.sourcePath,
+                    )
                 }
                 val snapshot = withContext(dbDispatcher) {
                     index?.reconcileAll()
@@ -781,7 +746,6 @@ class StudyController(
                 }
                 noteCount = snapshot.first
                 summaries = snapshot.second
-                rawFiles = withContext(Dispatchers.IO) { listMarkdownUnder(Path.of(root), "raw") }
                 treeTick += 1
                 if (result.failed != null) error = result.failed else ingestMessage = "Wrote ${result.written.joinToString(", ")}."
             } catch (caught: Exception) {
@@ -792,16 +756,11 @@ class StudyController(
         }
     }
 
-    fun skipQueued() {
-        val rest = queue.drop(1)
-        queue = rest
-        claims = emptyList()
-        if (rest.isNotEmpty()) selectRaw(rest.first())
-    }
-
     fun close() {
         chatGeneration += 1
         chatJob?.cancel()
+        ingestGeneration += 1
+        ingestJob?.cancel()
         generation += 1
         stopWatcher()
         runBlocking(dbDispatcher) {
@@ -851,7 +810,6 @@ class StudyController(
             noteCount = count
             summaries = listed
             searchHits = listed
-            rawFiles = withContext(Dispatchers.IO) { listMarkdownUnder(root, "raw") }
             status = root.toString()
             error = null
             showCreate = false

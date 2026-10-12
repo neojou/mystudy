@@ -272,7 +272,7 @@ class ChatAgentBehaviorTest {
             assertEquals("wiki/entities/植田和男.md", (byNumber as com.neojou.mystudy.wiki.agent.ReadPath.Ok).path)
             val byTitle = normalizeReadPath("植田和男", refs, index::pathsForLooseAlias)
             assertEquals("wiki/entities/植田和男.md", (byTitle as com.neojou.mystudy.wiki.agent.ReadPath.Ok).path)
-            for (unsafe in listOf("raw/sources/x.md", "../x.md", "/etc/passwd", "wiki/schema.md")) {
+            for (unsafe in listOf("raw/sources/x.md", "../x.md", "/etc/passwd", "wiki/schema.md", "wiki/review.md")) {
                 val observed = tools.read(unsafe, refs)
                 assertTrue(observed.readPath == null, unsafe)
                 assertTrue(observed.text.contains("error"), observed.text)

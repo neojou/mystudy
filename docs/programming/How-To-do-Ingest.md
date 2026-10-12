@@ -1,190 +1,215 @@
 # 程式如何做 Wiki Ingest
 
-目前預覽區的 Ingest 只做一件事：把 vault 裡的一則 Markdown 相對路徑 symbolic link 到 `{wikiRoot}/raw/sources/`。原始檔留在原處。目錄名對齊 [llm-wiki](https://github.com/nashsu/llm_wiki) 的 `raw/sources/`（複數）。這與之後會寫入的 wiki 頁 `{wikiRoot}/wiki/sources/` 是不同資料夾。
+預覽區的 Ingest 讀目前這則 vault 筆記，打兩次本機模型，組出可確認的 wiki 頁與 REVIEW。確認前不寫磁碟，也不在 `raw/sources/` 建 symlink。確認後才寫 wiki 頁、更新 `wiki/index.md`、append `wiki/log.md`，並把勾選的 REVIEW append 到 `wiki/review.md`。
 
-Extract claims 與 Draft wiki 頁的程式（`IngestPipeline`、`extractClaims`、`draftClaims`、確認對話框）仍保留，預覽 Ingest **不會**自動跑它們。沒有移植 llm-wiki 的 FILE block、purpose.md、overview.md、多模態或持久佇列。
+輸出語言是繁體中文（台灣）。來源可以是英文、日文、簡體中文或其他語言。程式只把語言名填進 prompt，不做 OpenCC，也不濾簡體字。
 
-左側檔案樹沒有右鍵選單。Compose Desktop 的 `ContextMenuArea` 與列上的 `clickable` 會搶同一下 pointer down，選單不會出現，因此改成預覽區按鈕。
+沒有佇列、快取、分塊、多模態、LLM 合併或 Deep Research。一次 ingest 最多兩次模型呼叫。
+
+左側檔案樹沒有右鍵選單。動作在預覽區按鈕。
 
 ## Vault 與 wiki
 
-Vault 是 Obsidian 庫根（例：`第二大腦`）。Wiki root 是同時有 `raw/` 與 `wiki/index.md` 的目錄，可以是 vault 根，也可以是裡面的 `llm-wiki/`。發現順序是 `vault/llm-wiki`，再 `vault`。Scaffold 仍建立 `vault/llm-wiki/`。
+Vault 是 Obsidian 庫根（例：`第二大腦`）。Wiki root 是同時有 `raw/` 與 `wiki/index.md` 的目錄，可以是 vault 根，也可以是裡面的 `llm-wiki/`。Scaffold 仍建立 `vault/llm-wiki/`，並留下空的 `raw/sources/`。
 
-Wiki **頁面**在 `{wikiRoot}/wiki/`（concepts、entities、sources、queries、index.md）。**來源**在 `{wikiRoot}/raw/`。`Zettelkasten/` 這類筆記與這兩個資料夾並列，屬於 vault，不是 wiki 頁面樹。
+`previewOffersIngest` 只對 vault 內、單一 `.md`、且不在 `{wikiRoot}/wiki/` 與 `{wikiRoot}/raw/` 的檔為真。資料夾、symlink、wiki 頁、raw 都不提供這個按鈕。vault 本身是 wiki root 時，`Zettelkasten/Inbox/卡片盒筆記法.md` 仍可 ingest。
 
-`isWikiManagedPath`（`WikiPaths.kt`）只把 `{wikiRoot}/wiki/` 與 `{wikiRoot}/raw/`（含自身）當成 wiki 管理區。Ingest 排除這兩條路徑，**不是**排除整個 wiki root。vault 本身是 wiki root 時，`Zettelkasten/Inbox/卡片盒筆記法.md` 仍可 ingest。
-
-檔案樹的 ` · wiki` 標在 `wiki/` 那一列，vault 根「第二大腦」不帶這個標。`wiki/` 與 `raw/` 底下的列著色。
+`linkIntoRawSource` 仍可建相對 symlink，測試也還鎖這件事。預覽按鈕不呼叫它。
 
 ## 呼叫鏈
 
-Wiki 選單沒有 Ingest。Browse 與 Ask 仍在 `HomeScreen.kt` 的 `Wiki` 子選單。
+Wiki 選單沒有 Ingest。Browse、Chat、Ask (keyword) 在 Wiki 選單。
 
-1. 左側點一則檔案：`FileTreePane` → `StudyController.previewFile`。畫面切到 Home 預覽。
-2. 右側第一行：`Ingest` 按鈕與檔名。`previewOffersIngest` 為真（vault 內、且不在 `{wikiRoot}/wiki/` 與 `{wikiRoot}/raw/` 的 `.md`）才啟用。
-3. 右側第二行：動作列，顯示 `ingestMessage` 與 busy。
-4. 按 Ingest：`ingestPreview` 對**目前這一檔**呼叫 `linkIntoRawSource`，然後停。沒有 extract、沒有 Draft、沒有資料夾批次。
-5. 沒有 wiki root 時開 Create wiki。檔案不能 ingest 時第二行說明原因。
-6. 已有指向同一檔的 link 時重用，動作列寫 `Already linked at raw/sources/…`。
+1. 左側點一則檔案：`FileTreePane` → `StudyController.previewFile`。換檔會取消進行中的 ingest。
+2. 右側 Ingest 按鈕在 `previewOffersIngest` 為真時可按。提示是 `Ingest reads this note, then asks before writing wiki pages.`
+3. 按 Ingest：`ingestPreview` 只處理目前這一檔。沒有 wiki root 時開 Create wiki，訊息是 `Create a wiki root before ingest.`
+4. 讀檔與兩次模型呼叫在 `Dispatchers.IO`。索引的 `resolve`、`findSourceForRaw`、`noteExists` 用 `runBlocking(wiki-index)`，而且只從 IO 執行緒呼叫。模型呼叫不佔 `wiki-index`。
+5. 結果留在記憶體的 `DraftProposal`。`ConfirmWriteDialog` 出現後，使用者按 Write 才 `applyProposal`。Cancel 不寫。
+6. 忙碌時動作列先 `Analyzing…`，再 `Generating…`。提案出來後是 `Confirm the pages before anything is written.`
+
+讀取的上下文：
+
+| 檔 | 規則 |
+| --- | --- |
+| 目前這則筆記 | 全文。空白就停，不打模型 |
+| `wiki/schema.md` | 必需。缺失或空白就停，不打模型，也不建立它 |
+| `wiki/purpose.md` | 可選。不建立 |
+| `wiki/index.md` | 可截斷。不建立 |
+| `wiki/overview.md` | 可選，只讀。不建立 |
+
+`sources` frontmatter 寫的是 vault 相對路徑，斜線分隔，例如 `Zettelkasten/Inbox/卡片盒筆記法.md`。拒絕絕對路徑、`..` 與含冒號的路徑。
 
 ## 檔案地圖
 
 | 職責 | 路徑 |
 | --- | --- |
-| 檔案樹選檔、`wiki/` 與 `raw/` 著色 | `composeApp/src/desktopMain/kotlin/com/neojou/mystudy/study/FileTreePane.kt` |
-| wiki root 判定、`isWikiManagedPath` | `composeApp/src/desktopMain/kotlin/com/neojou/mystudy/wiki/vault/WikiPaths.kt` |
-| 預覽第一行 Ingest、第二行動作列 | `composeApp/src/desktopMain/kotlin/com/neojou/mystudy/study/StudyScreens.kt` 的 `HomePane` |
-| 收集目標、列出 raw | `composeApp/src/desktopMain/kotlin/com/neojou/mystudy/wiki/vault/VaultListing.kt` |
-| 相對路徑 symlink | `composeApp/src/desktopMain/kotlin/com/neojou/mystudy/wiki/vault/RawStaging.kt` 的 `linkIntoRawSource` |
-| 新 link 路徑守衛 | `composeApp/src/desktopMain/kotlin/com/neojou/mystudy/wiki/vault/WriteGuard.kt` 的 `assertNewRawFile` |
-| 建立 `raw/sources/` | `composeApp/src/desktopMain/kotlin/com/neojou/mystudy/wiki/vault/WikiScaffolder.kt` |
-| 狀態、預覽 Ingest（只 link） | `composeApp/src/desktopMain/kotlin/com/neojou/mystudy/study/StudyController.kt` |
-| Extract / Draft 提案 | `composeApp/src/desktopMain/kotlin/com/neojou/mystudy/wiki/ingest/IngestPipeline.kt` |
-| Extract 送給模型的 prompt | `ai-prompts/ingest-extract.md` |
-| Draft 送給模型的 prompt | `ai-prompts/ingest-draft.md` |
-| 讀 prompt 檔、去掉註解、填 `{{名稱}}` | `composeApp/src/desktopMain/kotlin/com/neojou/mystudy/wiki/prompt/PromptFiles.kt` |
-| 確認後寫入 index / log | `composeApp/src/desktopMain/kotlin/com/neojou/mystudy/wiki/vault/ApplyWrites.kt` |
-| Ollama、`json = true`、budget | `composeApp/src/desktopMain/kotlin/com/neojou/mystudy/wiki/ollama/OllamaClient.kt` |
-| 畫面 | `HomePane` 預覽；`IngestPane` 仍在但預覽流程不會切過去 |
-| 行為測試 | `composeApp/src/desktopTest/kotlin/com/neojou/mystudy/wiki/WikiBehaviorTest.kt` |
+| 預覽按鈕 | `StudyScreens.kt` 的 `HomePane` |
+| 狀態與兩次呼叫 | `StudyController.kt` 的 `ingestPreview`、`runIngest`、`confirmWrites` |
+| Analyze / Generate | `wiki/ingest/IngestPipeline.kt` |
+| FILE / REVIEW 解析、路徑守衛 | `wiki/ingest/IngestBlocks.kt` |
+| 語言常數 | `IngestLanguage.NAME` |
+| Analyze prompt | `ai-prompts/ingest-analyze.md` |
+| Generate prompt | `ai-prompts/ingest-generate.md` |
+| 讀 prompt | `wiki/prompt/PromptFiles.kt` |
+| 確認對話框 | `StudyDialogs.kt` 的 `ConfirmWriteDialog` |
+| 寫頁、index、log、review | `wiki/vault/ApplyWrites.kt` |
+| `wiki/review.md` 條目 | `wiki/markdown/Catalog.kt` 的 `appendReviews` |
+| 寫入守衛 | `wiki/vault/WriteGuard.kt` 的 `assertWikiWrite` |
+| 行為測試 | `IngestBehaviorTest.kt`；symlink 與 `previewOffersIngest` 仍在 `WikiBehaviorTest.kt` |
 
-## 預覽按鈕到 symbolic link
+`StudyMode` 沒有 Ingest。沒有 `IngestPane`。
 
-`ingestTargets` 只收 vault 內、且不在 `{wikiRoot}/wiki/` 與 `{wikiRoot}/raw/` 的 `.md`。預覽 Ingest 只處理目前打開的那一檔。目標本身是 symlink 時略過。
+## 兩次模型呼叫
 
-`linkIntoRawSource(wikiRoot, source)`：
+兩次都是 `ChatRequest(..., json = false)`，沒有 `format: json`。Prompt 每次現讀。前言與 `<!-- -->` 不送出。
 
-- 目標：`{wikiRoot}/raw/sources/{檔名}.md`
-- wiki root 是 vault 裡的 `llm-wiki/` 時：
+1. Analyze：`ingest-analyze.md`。空回覆就停，不打 Generate。
+2. 從分析裡 `Page-worthy: yes` 的標題取最多 8 則既有頁摘錄。
+3. Generate：`ingest-generate.md`。這是第二次，也是最後一次。
 
-```
-llm-wiki/raw/sources/卡片盒筆記法.md
-  -> ../../../Zettelkasten/Inbox/卡片盒筆記法.md
-```
+兩份 prompt 都要在第一次呼叫前讀到，而且區段齊全。Analyze 需要 `system`、`language`、`context-schema`、`context-purpose`、`context-index`、`context-overview`、`user`。Generate 需要 `system`、`language`、`user`、`existing`、`ambiguous`、`none`。
 
-- wiki root 就是 vault（根目錄已有 `raw/` 與 `wiki/index.md`）時：
+停下時不寫檔。訊息：
 
-```
-raw/sources/卡片盒筆記法.md
-  -> ../../Zettelkasten/Inbox/卡片盒筆記法.md
-```
-
-- 相對路徑 link，vault 整夾搬移後仍指向同一則筆記
-- 不複製、不移動、不改原始檔
-- 已有指向同一 `toRealPath()` 的 link 就重用
-- 不同來源同檔名則加 ` (2)`、` (3)`
-- 禁止覆寫既有一般檔
-- `{wikiRoot}/wiki/` 與 `{wikiRoot}/raw/` 裡的檔不可 ingest
-
-`raw/sources/` 在 scaffold 時建立。既有 vault 第一次 link 時 `createDirectories`。不搬移舊的 `raw/source/`。
-
-檔案樹用 `isWikiManagedPath`（lexical）判斷一列是否在 `wiki/` 或 `raw/`，所以 `raw/sources/` 底下的 link 會當成 wiki 列（有色、Ingest 關閉），即使真實檔在 Inbox。`listVaultChildren` 會顯示目標落在 vault 內的檔案 symlink；目錄 symlink 仍跳過。
-
-`listMarkdownUnder` 與 `WikiIndex.walkMarkdown` 收入這些 link，相對路徑是 link 自己的路徑（`raw/sources/….md`）。讀檔走 `Files.newInputStream`，跟著 link 讀原文。Ask 仍不把 `raw/` 送進 prompt。
-
-## 兩步演算法（程式保留，預覽 Ingest 不呼叫）
-
-對齊 llm-wiki：先分析來源，再生成 wiki 頁。輸出是 JSON claims / JSON draft，本地程式負責路徑、append、catalog、log。`IngestPane` 的 Extract / Draft 仍可呼叫這些函式。預覽 Ingest 目前停在 symlink。
-
-### 1. Extract
-
-`IngestPipeline.extract(rawText, numCtx)`。每次呼叫前讀 `ai-prompts/ingest-extract.md`。`num_ctx <= 4096`，或讀出來的 system 加 user 超過字元預算，則停下，不打模型。檔案缺失、區段缺失、或缺少 `{{raw}}` 同樣停下。
-
-`ChatRequest(system, user, json = true)`。user 區段預設只有 `{{raw}}`，送出內容就是來源全文。`json = true` 寫在程式裡，改 prompt 檔不會關掉。
-
-`keepVerbatim` 丢掉 excerpt 沒有完整出現在原文裡的項。沒有任何 verbatim claim 則停下，不寫檔。
-
-Controller 把結果列成可取消勾選的 claims。這一步由 `extractClaims` 觸發，預覽 Ingest 不會自動跑。
-
-### 2. Draft
-
-`IngestPipeline.draft(index, rawRelative, claims, numCtx, today)`。沒勾選、context 太小、或沒有 `wiki/schema.md` 則停下。
-
-User 訊息由 `ai-prompts/ingest-draft.md` 的區段填成：
-
-```
-## schema.md
-{{schema}}
-
-## claims
-{{claims}}
-
-## existing pages
-{{existing}}
-```
-
-`claim` 區段預設是 `- title: {{title}} type: {{type}}` 加上下一行的 `{{statement}}`。陳述裡的換行會先改成空白。`existing` 區段是 `## {{path}}`、`title: {{title}}`、`{{body}}`。標題對到多頁時用 `ambiguous` 區段。沒有既有頁時，`{{existing}}` 填 `none` 區段，預設是 `(none)`。
-
-既有頁最多 8 則，只含 title 解析到唯一 concept/entity 的 claim。超預算就從後面丢掉既有頁。仍超則 `Stopped`，不打模型。prompt 檔讀不到也不打模型。
-
-`ChatRequest(system, user, json = true)`。回傳去掉 code fence 後當 JSON。`buildIngestProposal` 在本地組提案：
-
-| 情況 | 寫到哪 |
+| 情況 | 訊息 |
 | --- | --- |
-| 這個 raw 還沒有 source 頁 | 新建 `wiki/sources/{stem}.md` |
-| 已有 source 頁 | append 一節 |
-| 標題解析到一頁 | append 一節（conflict 只加註，不整頁覆寫） |
-| 標題找不到 | 新建 `wiki/concepts/` 或 `wiki/entities/` |
-| 標題對到多頁 | `selectable = false`，不寫 |
+| `num_ctx <= 4096` | `Context setting is too small. Nothing was sent.` |
+| 筆記空白 | `This note is empty. Nothing was sent.` |
+| 沒有 schema | `wiki/schema.md is missing. Nothing was written.` |
+| prompt 檔讀不到 | `Prompt file ai-prompts/{name} ... Nothing was sent.` |
+| 區段或佔位缺失 | `PromptException` 的句子 |
+| Analyze 塞不進預算 | `This note is too big for one pass. Split it. Nothing was sent.` |
+| 分析是空的 | `The analysis was empty. Nothing was written.` |
+| Generate 塞不進預算 | `The generate prompt does not fit. Nothing was written.` |
 
-新頁的 `sources` frontmatter 指向這則 raw（`raw/sources/….md` 去掉 `raw/` 前綴）。正文用 `ensureWikilink` 連回 source 頁。衝突頁預設不勾選。
+超預算只縮小可選上下文，不切來源，也不打第三次。預算是 `min(40000, num_ctx - 4096)`。
 
-### 3. 確認寫入
+Analyze：schema、purpose 各最多 8000 字；overview 最多 1500 字。index 從尾端縮到放得下，然後丢掉 overview，再丢掉 purpose。還是放不下就停，零次呼叫。
 
-`applyProposal` 只寫勾選且 `selectable` 的頁，然後更新 `wiki/index.md` catalog，最後 append `wiki/log.md`：`## [YYYY-MM-DD] ingest | {title}`。失敗就停，已寫的列在結果裡。`wiki/schema.md` 與 `raw/` 不能經這條路徑覆寫。
+Generate：從後面丢掉既有頁摘錄。分析加來源加 schema 仍然超過就停。這時 Analyze 那一次已經打過，分析不存下來。
 
-## 送給模型的 prompt
+## 解析與路徑
 
-文字在 `ai-prompts/ingest-extract.md` 與 `ai-prompts/ingest-draft.md`。改用詞時改這兩個檔，存檔後下一次 Extract 或 Draft 生效。路徑、verbatim 檢查、JSON 解析仍在 `IngestPipeline.kt`。
+Generate 的解析契約是整行標記：
 
-每個檔第一個區段標記之前是前言，不送出。區段裡的 `<!-- 註解 -->` 會刪掉。Ask 用純文字（`json = false`）；Ingest 兩步都是 `json = true`，這個旗標不在 prompt 檔裡。
+```text
+---FILE: wiki/concepts/標題.md---
+---END FILE---
+---REVIEW: contradiction | 標題---
+---END REVIEW---
+```
 
-### Extract：`ingest-extract.md`
+`OPTIONS:` 與 `SEARCH:` 是 REVIEW 正文裡的行。type 只准 `contradiction`、`duplicate`、`missing-page`、`suggestion`。
 
-`system` 要求只從這一篇抽 claim，excerpt 必須逐字複製，`suggestedType` 只有 `concept`、`entity` 或空字串，並且只回 JSON。預設句子見該檔。
+只有區塊裡面的 ` ``` ` 會切換 code fence。fence 裡的結尾標記留在正文。未關閉的區塊丟掉，警告 `Unclosed FILE discarded:` 或 `Unclosed REVIEW discarded:`。空白 FILE 是 `Skipped empty FILE`。區塊外的非空白文字只警告一次：`Ignored text outside FILE/REVIEW.`
 
-`parseClaims` 讀的欄位名是 `claims`、`statement`、`excerpt`、`suggestedType`、`suggestedTitle`、`aliases`。改掉這些名字會停在「The model did not return claims JSON.」，不寫檔。
+路徑必須是相對路徑，沒有 `..`、反斜線、冒號，也不是絕對路徑。只准 `wiki/sources/`、`wiki/concepts/`、`wiki/entities/` 底下的 `名稱.md`。`index.md`、`overview.md`、`log.md`、`schema.md`、`purpose.md`、`review.md` 即使放在這三個目錄也拒絕。`raw/` 與 `wiki/queries/` 拒絕。
 
-User 預設就是 `{{raw}}`，也就是通過字元預算的來源全文。
+模型寫的 `wiki/sources/其他名字.md` 收成 `wiki/sources/{stem}.md`。stem 來自原檔名，經 `safeFileStem`。第二個 source FILE 警告 `Ignored extra source FILE`，只留第一個。
 
-### Draft：`ingest-draft.md`
+沒有合法 FILE 但分析不是空白：用分析當正文，做一頁可勾選的 source，仍要確認。有其他合法 FILE 但模型沒給 source 時，同樣補一頁，警告 `Added a source page from the analysis because the model did not emit one.`
 
-`system` 要求只根據 claims 與既有摘錄起草，每個 concept 或 entity claim 一則 page，標題用該 claim 的標題，矛盾時 `conflict` 為 true，並且只回 JSON。預設句子見該檔。
+## 提案
 
-解析用的欄位名是 `sourceSummary`、`sourceBody`、`pages`、`title`、`type`、`summary`、`section`、`conflict`、`conflictNote`、`aliases`、`tags`、`logTitle`。改掉名字會讓這一輪停下，不寫檔。
+`buildIngestProposal` 在記憶體組頁，不寫檔。
 
-模型不可自己指定檔案路徑。路徑由 `buildIngestProposal` 用 alias 解析與 `allocatePath` 決定。
-
-## Ollama 與 budget
-
-與 Ask 共用 `StudyController.client()` → `OllamaClient`（loopback `/api/chat`、`num_ctx`、`think: false`）。Ingest 多設 `format: json`。
-
-| 常數 | 值 | 用途 |
-| --- | --- | --- |
-| `PromptBudget.MAX_INPUT_CHARS` | 40000 | 輸入字元上限 |
-| `PromptBudget.RESERVE_TOKENS` | 4096 | `num_ctx` 必須大於這個值 |
-| `PromptBudget.SCHEMA_CAP` | 8000 | draft 裡 schema 節錄 |
-| `PromptBudget.EXISTING_EXCERPT` | 1500 | 每則既有頁 |
-| 既有頁數量 | 8 | draft user 的 existing 區段 |
-
-## 與 llm-wiki 的對照
-
-| llm-wiki | 這裡 |
+| 情況 | 結果 |
 | --- | --- |
-| 匯入到 `raw/sources/` | `{wikiRoot}/raw/sources/` 的相對路徑 symlink |
-| Step 1 Analysis | `extract`：claims JSON |
-| Step 2 Generation（FILE block 寫 wiki） | `draft`：JSON 小節 + 本地 `buildIngestProposal` |
-| 佇列自動寫入 | 確認對話框之後才寫 |
-| purpose.md / overview.md | 沒有；schema.md 進 draft user |
+| 這個 vault 路徑已有 source 頁（`findSourceForRaw`） | append 到那一頁 |
+| `wiki/sources/{stem}.md` 不存在 | 新建 |
+| 該路徑存在，而且 `sources` 引用這則筆記，或 `sources` 是空的且標題 stem 相符、type 是空或 source | append |
+| 該路徑存在，但引用的是別則筆記 | `wiki/sources/{stem} (2).md` |
+| concept / entity 標題唯一解析到一頁 | append 一節，不整頁覆寫 |
+| 解析到多頁 | `selectable = false`，`newText` 保持舊文 |
+| 解析不到 | 新建。檔名用標題，不用模型檔名。撞名加 ` (2)` |
+| frontmatter `type` 是 entity 或 concept | 用那個目錄；否則用守衛後的目錄 |
+
+既有頁先去掉模型 FILE 的 frontmatter，再 `appendSection`。`updated` 改成今天。不替換舊正文，也不合併舊 frontmatter。
+
+新頁由程式重寫 frontmatter：`title`、目錄決定的 `type`、`created` 與 `updated` 為今天、`sources` 含這則 vault 相對路徑。保留模型的 aliases 與 tags。不加 `related` 欄。concept 與 entity 的正文 `ensureWikilink` 回 source 頁（`[[sources/{stem}]]`）。source 頁不自動連回 Inbox 筆記的檔名。
+
+contradiction REVIEW 的標題若與某頁標題正規化後相同，或 `resolve` 唯一指到該頁，該頁 `conflict = true`，預設不勾。既有頁的註記是 `Conflict. Checking this appends a section and does not replace the page.` 新頁是 `Conflict. Checking this writes a new page.` 重複的 REVIEW 不會再取消勾選。
+
+同一提案裡重複的相對路徑略過，警告 `Skipped duplicate page`。
+
+Catalog 摘要是正文第一段非標題，壓成一行，最多 200 字。log 標題用 source 頁標題，否則用 stem。
+
+## 確認與寫入
+
+對話框是既有的 `Dialog` + `Surface`，不是 `AlertDialog`，也不是新視窗。Ask 與 Chat 的存檔仍用同一個對話框；它們的 reviews 是空的，所以不會寫 `wiki/review.md`。
+
+畫面文字維持英文：
+
+- 標題 `Confirm write`
+- 勾選的頁會更新 index 並 append log
+- 有 REVIEW 時說明會 append 到 `wiki/review.md`
+- schema 警告、截斷說明、parser 警告
+- Pages：核取方塊、路徑、註記、diff
+- Reviews：核取方塊、`type | title`、OPTIONS、SEARCH、正文約 12 行（預覽去掉 OPTIONS / SEARCH 行）
+- Write / Cancel
+
+頁面預設勾選是 `selectable && !conflict`。四種 REVIEW 預設全勾。Write 在至少有一頁可寫或一則 REVIEW 被勾時才可按。
+
+`applyProposal` 順序：勾選且可選的頁，然後 catalog 有變才寫 index，然後只要有頁或 REVIEW 就 append log，最後 append 勾選的 REVIEW。失敗就停，不回滾。`written` 列出已經落地的路徑。頁與 REVIEW 都是空的就什麼都不寫。
+
+`wiki/review.md` 不存在時以 `# Review` 開頭。每一則：
+
+```text
+## [YYYY-MM-DD] type | title
+
+模型正文（含 OPTIONS / SEARCH）
+
+- source: vault/relative.md
+```
+
+只勾 REVIEW 時仍寫 review 與 log，不寫概念頁，index 也不會因為沒有頁而更新。
+
+log 行是 `## [YYYY-MM-DD] ingest | {title}`。有 REVIEW 時細節多一行 `wiki/review.md`。
+
+`assertWikiWrite` 允許 wiki 頁、`wiki/index.md`、`wiki/log.md`、`wiki/review.md`。仍拒絕 `wiki/schema.md`、`raw/` 與逃出 root 的路徑。
+
+Ask 與 Chat 不讀 `wiki/review.md`，與 index、log、schema 同一組排除。索引仍會收錄這個檔，檢索 SQL 與 `includedAskPath` 把它濾掉。`wiki.read_page` 拒絕這條路徑。
+
+## Prompt
+
+改 `ai-prompts/ingest-analyze.md` 或 `ingest-generate.md` 後存檔，下一次 Ingest 就用新內容。`{{lang}}` 由 `IngestLanguage.NAME` 填入，值是 `Traditional Chinese (Taiwan, 繁體中文)`。這不是偏好，也不寫進 vault。
+
+Analyze 的 system 佔位是 `{{languageRule}}`、`{{context}}`。context 依序接 schema、有內容才接 purpose、index 節錄非空才接 index、有內容才接 overview。
+
+Generate 的 system 佔位是 `{{languageRule}}`、`{{schema}}`、`{{sourceStem}}`。user 是 `{{analysis}}`、`{{sourceName}}`、`{{sourcePath}}`、`{{raw}}`、`{{existing}}`。沒有既有頁時 `{{existing}}` 是 `(none)`。
+
+標記字串改掉之後，這一輪可能沒有合法頁，只剩後援 source，而且仍要等人確認。
+
+## Ollama
+
+與 Ask、Chat 共用 `OllamaClient`：loopback、`/api/chat`、`think: false`。Ingest 不設 `format: json`。
+
+| 常數 | 值 |
+| --- | --- |
+| `MAX_INPUT_CHARS` | 40000 |
+| `RESERVE_TOKENS` | 4096 |
+| `SCHEMA_CAP` | 8000 |
+| `EXISTING_EXCERPT` | 1500 |
+| 既有頁數量 | 8 |
+
+## 與設計參考的差異
+
+`docs/programming/ingest_design_ref.md` 第 1 步仍寫先建 symlink。實作不採用那一步。來源就是目前預覽的筆記。`sources` 是 vault 相對路徑，不是 `sources/{stem}.md`。舊頁若仍寫 `sources/x.md`，`findSourceForRaw` 對不上，可能另開 ` (2)`。
+
+Scaffold 的 `wiki/schema.md` 種子仍描述 raw/sources symlink。Ingest 不改這個檔。
 
 ## 行為測試鎖住的契約
 
-`WikiBehaviorTest.kt`：
+`IngestBehaviorTest.kt`：
 
-- `previewOffersIngestOutsideTheWikiRoot`：nested `llm-wiki` 時 Inbox `.md` 可 ingest；wiki / raw 與資料夾不行
-- `vaultAsWikiRootLeavesInboxIngestible`：wiki root 等於 vault 時，`Zettelkasten/Inbox/*.md` 可 ingest、建相對 symlink；`wiki/` 與 `raw/` 下不可
-- `stagingLinksWithoutCopyingOrOverwritingTheOriginal`：建的是 symlink、原文不變、同名不同內容加後綴、同一來源重用、索引看得到 `raw/sources/`
-- `ingestTargetsSkipTheWikiTree`：`wiki/` 內的檔不會進 ingest
-- `writeGuardRejectsSchemaRawAndEscape`：不能經寫入通道改 schema 或覆寫 raw
-- `badExcerptsAreDroppedAndConflictsStayOutOfTheWrite`：excerpt 必須原文出現；conflict 預設不寫
-- `ambiguousTitlesAreNotWritable`：標題對到多頁則不寫
+- 兩次呼叫、`json = false`、確認前 wiki root 與 `raw/sources/` 與原文不變；確認後寫出繁中流程需要的 source、concept、entity、index、log、review
+- context 太小、schema 缺失、prompt 檔或 system 區段缺失、空白筆記、來源超過預算：零次呼叫。分析空白：一次呼叫。Generate 仍超預算：一次呼叫，不寫檔
+- parser：正常 FILE、未關閉區塊、fence 內的假結尾、空 FILE、不安全路徑、未知 REVIEW、四種 REVIEW 與多行 SEARCH
+- source 路徑收成 `wiki/sources/{stem}.md`；新頁 `sources` 含 vault 相對路徑；concept / entity 連回 `[[sources/{stem}]]`
+- 既有頁只 append；ambiguous 不可寫；contradiction 預設不勾
+- 只寫 REVIEW 時有 review 與 log，沒有概念頁；既有 `# Review` 開頭還在；沒呼叫 apply 就沒有 review.md
+- 送出的 system 含 `Traditional Chinese (Taiwan, 繁體中文)`，不含前言
+- 沒有合法 FILE 時仍有一頁可勾選的後援 source，確認前不寫
+- `wiki/review.md` 不進 Ask 檢索、`wiki.read_page` 拒絕它、Ask/Chat 存檔不新建 review 條目
+
+`WikiBehaviorTest.kt` 仍鎖 symlink、`previewOffersIngest`、寫入守衛（`wiki/review.md` 允許，schema 與 raw 拒絕）與 Lexical Ask。`ChatAgentBehaviorTest.readPageRejectsUnsafePaths` 含 `wiki/review.md`。

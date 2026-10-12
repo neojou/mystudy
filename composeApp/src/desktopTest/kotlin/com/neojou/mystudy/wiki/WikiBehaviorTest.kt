@@ -24,24 +24,16 @@ import com.neojou.mystudy.wiki.ask.scoreNote
 import com.neojou.mystudy.wiki.index.WikiIndex
 import com.neojou.mystudy.wiki.index.ftsQuery
 import com.neojou.mystudy.wiki.markdown.analyzeQuery
-import com.neojou.mystudy.wiki.ingest.DraftResult
-import com.neojou.mystudy.wiki.ingest.IngestPipeline
-import com.neojou.mystudy.wiki.ingest.ExtractResult
-import com.neojou.mystudy.wiki.ingest.buildIngestProposal
-import com.neojou.mystudy.wiki.ingest.keepVerbatim
 import com.neojou.mystudy.wiki.markdown.appendLog
 import com.neojou.mystudy.wiki.markdown.insertCatalogLine
 import com.neojou.mystudy.wiki.markdown.parseNote
 import com.neojou.mystudy.wiki.markdown.parseWikilinks
-import com.neojou.mystudy.wiki.model.Claim
 import com.neojou.mystudy.wiki.model.Resolution
-import com.neojou.mystudy.wiki.model.defaultChecked
 import com.neojou.mystudy.wiki.ollama.ChatClient
 import com.neojou.mystudy.wiki.prompt.loadPrompt
 import com.neojou.mystudy.wiki.prompt.locateAiPrompts
 import com.neojou.mystudy.wiki.ollama.ChatException
 import com.neojou.mystudy.wiki.ollama.endpointOrigin
-import com.neojou.mystudy.wiki.vault.applyProposal
 import com.neojou.mystudy.wiki.vault.assertNewRawFile
 import com.neojou.mystudy.wiki.vault.assertWikiWrite
 import com.neojou.mystudy.wiki.vault.discoverWikiRoot
@@ -50,8 +42,6 @@ import com.neojou.mystudy.wiki.vault.listMarkdownUnder
 import com.neojou.mystudy.wiki.vault.linkIntoRawSource
 import com.neojou.mystudy.wiki.vault.scaffoldWiki
 import com.neojou.mystudy.wiki.vault.Discovery
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.jsonObject
 import java.nio.file.Files
 import java.nio.file.Path
 import java.time.LocalDate
@@ -149,6 +139,7 @@ class WikiBehaviorTest {
         assertFails { assertWikiWrite(root, "wiki/schema.md") }
         assertFails { assertWikiWrite(root, "../outside.md") }
         assertFails { assertWikiWrite(root, "raw/note.md") }
+        assertEquals("review.md", assertWikiWrite(root, "wiki/review.md").fileName.toString())
         assertFails { assertNewRawFile(root, "raw/note.md") }
         val raw = root.resolve("raw").resolve("sources").resolve("note.md")
         raw.writeText("kept\n")
@@ -618,7 +609,7 @@ class WikiBehaviorTest {
     }
 
     @Test
-    fun limitPacketCapsPagesAndExtractStillRefusesAHugeRawNote() {
+    fun limitPacketCapsPages() {
         val pages = (1..9).map { number ->
             DraftPage("wiki/concepts/$number.md", "$number", "concept", "字".repeat(1_000), fromGraph = number > 5)
         }
@@ -631,9 +622,6 @@ class WikiBehaviorTest {
             400,
         )
         assertEquals(400, shortened.single().text.length)
-        val pipeline = IngestPipeline(ChatClient { error("should not be called") })
-        val stopped = pipeline.extract("字".repeat(100_000), 65536)
-        assertIs<ExtractResult.Stopped>(stopped)
     }
 
     @Test
@@ -667,92 +655,6 @@ class WikiBehaviorTest {
         val edge = assertIs<GraphHit.Edge>(hitGraph(points, edges, middle, 28f, 12f))
         assertEquals("見 [[乙]]", edge.line)
         assertIs<GraphHit.Miss>(hitGraph(points, edges, Offset(1f, 1f), 28f, 8f))
-    }
-
-    @Test
-    fun badExcerptsAreDroppedAndConflictsStayOutOfTheWrite() {
-        val kept = keepVerbatim(
-            "alpha beta",
-            listOf(
-                Claim("no", "missing quote", "", "No", emptyList()),
-                Claim("yes", "alpha", "concept", "Yes", emptyList()),
-            ),
-        )
-        assertEquals(listOf("Yes"), kept.map { it.suggestedTitle })
-        val root = scaffoldWiki(tempDir())
-        val concept = root.resolve("wiki").resolve("concepts").resolve("注意力.md")
-        val original = conceptText("注意力")
-        concept.writeText(original)
-        val model = Json.parseToJsonElement(
-            """
-            {"sourceSummary":"摘要","sourceBody":"來源正文","pages":[{"title":"注意力","type":"concept","summary":"摘要","section":"追加小節","conflict":true,"conflictNote":"前後不一致","aliases":[],"tags":[]}],"logTitle":"注意力"}
-            """.trimIndent(),
-        ).jsonObject
-        val proposal = buildIngestProposal(
-            rawRelative = "raw/note.md",
-            claims = listOf(Claim("注意力是一種選擇", "注意力是一種選擇", "concept", "注意力", emptyList())),
-            model = model,
-            schema = root.resolve("wiki").resolve("schema.md").readText(),
-            schemaTruncated = false,
-            today = LocalDate.of(2026, 10, 8),
-            read = { relative -> if (relative == "wiki/concepts/注意力.md") original else null },
-            resolve = { title, _ -> if (title == "注意力") Resolution.One("wiki/concepts/注意力.md") else Resolution.None },
-            findSource = { null },
-            exists = { relative -> relative == "wiki/concepts/注意力.md" },
-            rawLink = "note",
-        )
-        val conflict = proposal.pages.first { it.relativePath == "wiki/concepts/注意力.md" }
-        assertTrue(conflict.conflict)
-        assertFalse(conflict.relativePath in defaultChecked(proposal.pages))
-        val logBefore = root.resolve("wiki").resolve("log.md").readBytes()
-        val applied = applyProposal(
-            root,
-            proposal.pages,
-            defaultChecked(proposal.pages),
-            proposal.logTitle,
-            proposal.operation,
-            LocalDate.of(2026, 10, 8),
-        )
-        assertNull(applied.failed)
-        assertEquals(original, concept.readText())
-        assertTrue(root.resolve("wiki").resolve("sources").resolve("note.md").toFile().isFile)
-        val log = root.resolve("wiki").resolve("log.md").readText()
-        assertTrue(log.startsWith(logBefore.decodeToString()))
-        assertTrue(log.contains("## [2026-10-08] ingest | 注意力"))
-    }
-
-    @Test
-    fun ambiguousTitlesAreNotWritable() {
-        val model = Json.parseToJsonElement(
-            """{"sourceSummary":"s","sourceBody":"body","pages":[],"logTitle":"t"}""",
-        ).jsonObject
-        val proposal = buildIngestProposal(
-            rawRelative = "raw/a.md",
-            claims = listOf(Claim("stmt", "stmt", "concept", "GPU", emptyList())),
-            model = model,
-            schema = "plain schema",
-            schemaTruncated = false,
-            today = LocalDate.of(2026, 10, 8),
-            read = { "old page\n" },
-            resolve = { _, _ -> Resolution.Ambiguous(listOf("wiki/concepts/a.md", "wiki/concepts/b.md")) },
-            findSource = { null },
-            exists = { false },
-            rawLink = "a",
-        )
-        val ambiguous = proposal.pages.first { it.relativePath == "wiki/concepts/a.md" }
-        assertFalse(ambiguous.selectable)
-        val root = scaffoldWiki(tempDir())
-        val file = root.resolve("wiki").resolve("concepts").resolve("a.md")
-        file.writeText("old page\n")
-        applyProposal(
-            root,
-            proposal.pages.filter { !it.selectable },
-            setOf(ambiguous.relativePath),
-            "t",
-            "ingest",
-            LocalDate.of(2026, 10, 8),
-        )
-        assertEquals("old page\n", file.readText())
     }
 
     @Test
@@ -845,54 +747,6 @@ class WikiBehaviorTest {
             assertEquals(0, calls)
             assertTrue(stopped.message.contains("ask.md"))
             assertTrue(stopped.message.contains("system"))
-        }
-        var calls = 0
-        val missing = IngestPipeline(ChatClient { calls += 1; "no" }, tempDir()).extract("alpha", 65536)
-        val extractStopped = assertIs<ExtractResult.Stopped>(missing)
-        assertEquals(0, calls)
-        assertTrue(extractStopped.message.contains("ingest-extract.md"))
-    }
-
-    @Test
-    fun extractAndDraftPromptsDropThePreface() {
-        var system = ""
-        var user = ""
-        val extracted = IngestPipeline(ChatClient { request ->
-            system = request.system
-            user = request.user
-            """{"claims":[{"statement":"alpha","excerpt":"alpha","suggestedType":"concept","suggestedTitle":"Alpha","aliases":[]}]}"""
-        }).extract("alpha beta", 65536)
-        assertIs<ExtractResult.Ok>(extracted)
-        assertEquals("alpha beta", user)
-        assertTrue(system.contains("JSON only"))
-        assertFalse(system.contains("這段前言不會送給模型"))
-        assertFalse(user.contains("這段前言不會送給模型"))
-
-        val root = scaffoldWiki(tempDir())
-        WikiIndex.open(root, tempDir().resolve("draft-prompt.sqlite")).use { index ->
-            index.reconcileAll()
-            var calls = 0
-            val drafted = IngestPipeline(ChatClient { request ->
-                calls += 1
-                system = request.system
-                user = request.user
-                """{"sourceSummary":"s","sourceBody":"b","pages":[],"logTitle":"t"}"""
-            }).draft(
-                index,
-                "raw/sources/note.md",
-                listOf(Claim("一行\n陳述", "一行 陳述", "concept", "標題", emptyList())),
-                65536,
-                LocalDate.of(2026, 10, 11),
-            )
-            assertEquals(1, calls)
-            assertIs<DraftResult.Ok>(drafted)
-            assertTrue(system.contains("JSON only"))
-            assertFalse(system.contains("這段前言不會送給模型"))
-            assertFalse(user.contains("這段前言不會送給模型"))
-            assertTrue(user.contains("- title: 標題 type: concept"))
-            assertTrue(user.contains("  一行 陳述"))
-            assertTrue(user.contains("(none)"))
-            assertTrue(user.contains("## schema.md"))
         }
     }
 

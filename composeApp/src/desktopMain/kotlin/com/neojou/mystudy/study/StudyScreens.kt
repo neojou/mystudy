@@ -16,7 +16,6 @@ import androidx.compose.foundation.rememberScrollbarAdapter
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
-import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -101,7 +100,7 @@ fun HomePane(controller: StudyController, modifier: Modifier = Modifier) {
             Text(
                 text = controller.ingestMessage.ifBlank {
                     if (controller.canIngestPreview()) {
-                        "Ingest links this note into raw/sources/."
+                        "Ingest reads this note, then asks before writing wiki pages."
                     } else {
                         "This file cannot be ingested."
                     }
@@ -158,69 +157,6 @@ fun BrowsePane(controller: StudyController, modifier: Modifier = Modifier) {
                 style = MaterialTheme.typography.bodyMedium,
                 modifier = Modifier.weight(1f).verticalScroll(rememberScrollState()),
             )
-        }
-    }
-}
-
-@Composable
-fun IngestPane(controller: StudyController, modifier: Modifier = Modifier) {
-    val ready = controller.wikiRoot != null
-    Column(modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Button(
-                onClick = controller::extractClaims,
-                enabled = ready && !controller.busy && controller.selectedRaw != null,
-            ) { Text("Extract") }
-            Button(
-                onClick = controller::draftClaims,
-                enabled = ready && !controller.busy && controller.claims.any { it.checked },
-            ) { Text("Draft") }
-            if (controller.queue.size > 1) {
-                TextButton(onClick = controller::skipQueued, enabled = !controller.busy) { Text("Skip") }
-            }
-        }
-        if (!ready) {
-            Text("Create a wiki root before ingest.")
-        }
-        if (controller.queue.isNotEmpty()) {
-            Text("Queue: ${controller.queue.joinToString(", ")}", style = MaterialTheme.typography.bodySmall)
-        }
-        if (controller.ingestMessage.isNotBlank()) {
-            Text(controller.ingestMessage, style = MaterialTheme.typography.bodyMedium)
-        }
-        Row(Modifier.weight(1f).fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Column(Modifier.weight(0.35f).fillMaxHeight().verticalScroll(rememberScrollState())) {
-                Text("raw/sources/", style = MaterialTheme.typography.titleSmall)
-                controller.rawFiles.forEach { relative ->
-                    val selected = relative == controller.selectedRaw
-                    Text(
-                        text = relative,
-                        color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable(enabled = !controller.busy) { controller.selectRaw(relative) }
-                            .padding(vertical = 4.dp),
-                    )
-                }
-            }
-            Column(Modifier.weight(0.65f).fillMaxHeight().verticalScroll(rememberScrollState())) {
-                Text(controller.selectedRaw ?: "No raw note selected", style = MaterialTheme.typography.titleSmall)
-                Text(controller.rawPreview, style = MaterialTheme.typography.bodyMedium)
-                controller.claims.forEachIndexed { index, choice ->
-                    Row(verticalAlignment = Alignment.Top) {
-                        Checkbox(
-                            checked = choice.checked,
-                            onCheckedChange = { controller.setClaimChecked(index, it) },
-                            enabled = !controller.busy,
-                        )
-                        Column {
-                            Text(choice.claim.suggestedTitle, fontWeight = FontWeight.Medium)
-                            Text(choice.claim.statement, style = MaterialTheme.typography.bodySmall)
-                            Text(choice.claim.excerpt, style = MaterialTheme.typography.bodySmall)
-                        }
-                    }
-                }
-            }
         }
     }
 }

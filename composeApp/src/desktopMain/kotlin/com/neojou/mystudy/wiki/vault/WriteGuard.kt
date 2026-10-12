@@ -14,7 +14,7 @@ private val pageDirs = setOf("sources", "concepts", "entities", "queries")
 fun assertWikiWrite(root: Path, relative: String): Path {
     val target = resolveInside(root, relative) ?: error("Blocked path: $relative")
     val allowed = when {
-        relative == "wiki/index.md" || relative == "wiki/log.md" -> true
+        relative == "wiki/index.md" || relative == "wiki/log.md" || relative == "wiki/review.md" -> true
         else -> isPageFile(relative)
     }
     if (!allowed || relative == "wiki/schema.md") error("Blocked path: $relative")
