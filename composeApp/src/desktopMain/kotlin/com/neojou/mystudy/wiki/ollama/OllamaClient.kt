@@ -1,11 +1,14 @@
 package com.neojou.mystudy.wiki.ollama
 
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
+import java.io.BufferedReader
 import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
@@ -46,6 +49,19 @@ class OllamaClient(
         } catch (error: ChatException) {
             if (!error.message.orEmpty().contains("think", ignoreCase = true)) throw error
             post(request, includeThink = false)
+        }
+    }
+
+    /**
+     * One streaming `/api/chat` call. [complete] stays non-streaming.
+     * [onDelta] receives each `message.content` piece. The return value is the full text.
+     */
+    fun stream(request: ChatRequest, onDelta: (String) -> Unit): String = lock.withLock {
+        try {
+            postStream(request, includeThink = true, onDelta)
+        } catch (error: ChatException) {
+            if (!error.message.orEmpty().contains("think", ignoreCase = true)) throw error
+            postStream(request, includeThink = false, onDelta)
         }
     }
 
@@ -102,6 +118,65 @@ class OllamaClient(
         if (content.isNullOrBlank()) throw ChatException("Ollama returned an empty answer.")
         return content
     }
+
+    private fun postStream(request: ChatRequest, includeThink: Boolean, onDelta: (String) -> Unit): String {
+        val body = chatBody(request, includeThink, stream = true)
+        val httpRequest = HttpRequest.newBuilder(URI.create("$origin/api/chat"))
+            .timeout(Duration.ofMinutes(5))
+            .header("Content-Type", "application/json; charset=utf-8")
+            .POST(HttpRequest.BodyPublishers.ofString(body))
+            .build()
+        val response = try {
+            http.send(httpRequest, HttpResponse.BodyHandlers.ofInputStream())
+        } catch (error: Exception) {
+            throw ChatException(error.message ?: "Ollama request failed")
+        }
+        response.body().use { input ->
+            if (response.statusCode() !in 200..299) {
+                val snippet = input.readBytes().toString(Charsets.UTF_8).take(500)
+                throw ChatException("Ollama HTTP ${response.statusCode()}: $snippet")
+            }
+            val accumulated = StringBuilder()
+            BufferedReader(input.reader(Charsets.UTF_8)).use { reader ->
+                while (true) {
+                    val line = reader.readLine() ?: break
+                    if (line.isBlank()) continue
+                    val obj = try {
+                        Json.parseToJsonElement(line).jsonObject
+                    } catch (error: Exception) {
+                        throw ChatException("Ollama returned unreadable JSON: ${error.message}")
+                    }
+                    val content = (obj["message"]?.jsonObject?.get("content") as? JsonPrimitive)?.contentOrNull
+                    if (!content.isNullOrEmpty()) {
+                        accumulated.append(content)
+                        onDelta(content)
+                    }
+                    val done = obj["done"] as? JsonPrimitive
+                    if (done?.contentOrNull == "true") break
+                }
+            }
+            if (accumulated.isBlank()) throw ChatException("Ollama returned an empty answer.")
+            return accumulated.toString()
+        }
+    }
+
+    private fun chatBody(request: ChatRequest, includeThink: Boolean, stream: Boolean): String = buildJsonObject {
+        put("model", model)
+        put("stream", stream)
+        if (includeThink) put("think", false)
+        put("options", buildJsonObject { put("num_ctx", numCtx) })
+        if (request.json) put("format", "json")
+        put("messages", buildJsonArray {
+            add(buildJsonObject {
+                put("role", "system")
+                put("content", request.system)
+            })
+            add(buildJsonObject {
+                put("role", "user")
+                put("content", request.user)
+            })
+        })
+    }.toString()
 }
 
 fun endpointOrigin(baseUrl: String): String {

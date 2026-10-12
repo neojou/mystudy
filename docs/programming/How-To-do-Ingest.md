@@ -4,7 +4,7 @@
 
 輸出語言是繁體中文（台灣）。來源可以是英文、日文、簡體中文或其他語言。程式只把語言名填進 prompt，不做 OpenCC，也不濾簡體字。
 
-沒有佇列、快取、分塊、多模態、LLM 合併或 Deep Research。一次 ingest 最多兩次模型呼叫。
+沒有佇列、快取、分塊、多模態、LLM 合併或 Deep Research。一次 ingest 最多兩次模型呼叫。成功的深度研究會從 `wiki/review.md` 移除對應的那一段，見 `docs/programming/How-To-do-Deep-Research.md`。Ingest 本身仍不做深度研究。
 
 左側檔案樹沒有右鍵選單。動作在預覽區按鈕。
 

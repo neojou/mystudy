@@ -1,5 +1,6 @@
 package com.neojou.mystudy.wiki.settings
 
+import java.net.URI
 import java.util.prefs.Preferences
 
 data class StudySettings(
@@ -8,6 +9,7 @@ data class StudySettings(
     val ollamaBaseUrl: String,
     val ollamaModel: String,
     val ollamaNumCtx: Int,
+    val searxngUrl: String,
 )
 
 interface SettingsStore {
@@ -52,14 +54,19 @@ class AppSettings(private val store: SettingsStore) {
         ollamaModel = store.get(KEY_OLLAMA_MODEL, DEFAULT_OLLAMA_MODEL).ifBlank { DEFAULT_OLLAMA_MODEL },
         ollamaNumCtx = store.get(KEY_OLLAMA_NUM_CTX, DEFAULT_NUM_CTX.toString()).toIntOrNull()
             ?: DEFAULT_NUM_CTX,
+        searxngUrl = store.get(KEY_SEARXNG_URL, DEFAULT_SEARXNG_URL).ifBlank { DEFAULT_SEARXNG_URL },
     )
 
-    fun save(settings: StudySettings) {
+    /** Stores [settings]. A blank SearXNG URL becomes the default. A non-loopback URL is rejected. */
+    fun save(settings: StudySettings): StudySettings {
+        val searxngUrl = normalizeSearxngUrl(settings.searxngUrl)
         store.put(KEY_VAULT, settings.vaultPath.trim())
         store.put(KEY_WIKI_ROOT, settings.wikiRootPath.trim())
         store.put(KEY_OLLAMA_URL, settings.ollamaBaseUrl.trim())
         store.put(KEY_OLLAMA_MODEL, settings.ollamaModel.trim())
         store.put(KEY_OLLAMA_NUM_CTX, settings.ollamaNumCtx.toString())
+        store.put(KEY_SEARXNG_URL, searxngUrl)
+        return settings.copy(searxngUrl = searxngUrl)
     }
 
     companion object {
@@ -67,11 +74,42 @@ class AppSettings(private val store: SettingsStore) {
         const val DEFAULT_OLLAMA_URL: String = "http://127.0.0.1:11434/v1"
         const val DEFAULT_OLLAMA_MODEL: String = "gemma4-64k"
         const val DEFAULT_NUM_CTX: Int = 65536
+        const val DEFAULT_SEARXNG_URL: String = "http://127.0.0.1:8080"
+
+        /**
+         * Blank becomes [DEFAULT_SEARXNG_URL].
+         * Only `http` or `https` on `127.0.0.1` or `localhost` is kept.
+         */
+        fun normalizeSearxngUrl(raw: String): String {
+            val trimmed = raw.trim()
+            if (trimmed.isBlank()) return DEFAULT_SEARXNG_URL
+            val uri = try {
+                URI(trimmed)
+            } catch (_: Exception) {
+                throw IllegalArgumentException("SearXNG URL is invalid.")
+            }
+            val host = uri.host?.lowercase() ?: throw IllegalArgumentException("SearXNG URL is invalid.")
+            if (host != "127.0.0.1" && host != "localhost") {
+                throw IllegalArgumentException("SearXNG host must be loopback.")
+            }
+            val scheme = uri.scheme?.lowercase()
+            if (scheme != "http" && scheme != "https") {
+                throw IllegalArgumentException("SearXNG URL is invalid.")
+            }
+            val path = uri.rawPath
+            if (!path.isNullOrEmpty() && path != "/") throw IllegalArgumentException("SearXNG URL is invalid.")
+            if (!uri.rawQuery.isNullOrEmpty() || uri.rawFragment != null) {
+                throw IllegalArgumentException("SearXNG URL is invalid.")
+            }
+            val port = if (uri.port == -1) "" else ":${uri.port}"
+            return "$scheme://$host$port"
+        }
 
         private const val KEY_VAULT = "vaultPath"
         private const val KEY_WIKI_ROOT = "wikiRootPath"
         private const val KEY_OLLAMA_URL = "ollamaBaseUrl"
         private const val KEY_OLLAMA_MODEL = "ollamaModel"
         private const val KEY_OLLAMA_NUM_CTX = "ollamaNumCtx"
+        private const val KEY_SEARXNG_URL = "searxngUrl"
     }
 }

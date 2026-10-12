@@ -26,6 +26,17 @@ import com.neojou.mystudy.wiki.ingest.IngestResult
 import com.neojou.mystudy.wiki.ingest.vaultRelative
 import com.neojou.mystudy.wiki.model.DraftProposal
 import com.neojou.mystudy.wiki.ollama.OllamaClient
+import com.neojou.mystudy.wiki.prompt.locateAiPrompts
+import com.neojou.mystudy.wiki.research.ResearchPhase
+import com.neojou.mystudy.wiki.research.ResearchResult
+import com.neojou.mystudy.wiki.research.ResearchUpdate
+import com.neojou.mystudy.wiki.research.ResearchRunner
+import com.neojou.mystudy.wiki.research.ReviewEntry
+import com.neojou.mystudy.wiki.research.SearxngClient
+import com.neojou.mystudy.wiki.research.SearxngHit
+import com.neojou.mystudy.wiki.research.SearxngStatus
+import com.neojou.mystudy.wiki.research.parseReviewFile
+import com.neojou.mystudy.wiki.research.researchBlockReason
 import com.neojou.mystudy.wiki.settings.AppSettings
 import com.neojou.mystudy.wiki.settings.SettingsStore
 import com.neojou.mystudy.wiki.settings.StudySettings
@@ -53,6 +64,7 @@ import java.nio.file.Path
 import kotlin.io.path.readText
 import java.time.LocalDate
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.io.path.isDirectory
 
 data class ChatBubble(
@@ -165,6 +177,21 @@ class StudyController(
     var proposal by mutableStateOf<DraftProposal?>(null)
         private set
 
+    var searxngStatus by mutableStateOf<SearxngStatus>(SearxngStatus.Unknown)
+        private set
+    var researchPhase by mutableStateOf(ResearchPhase.Idle)
+        private set
+    var researchHits by mutableStateOf<List<SearxngHit>>(emptyList())
+        private set
+    var researchText by mutableStateOf("")
+        private set
+    var researchMessage by mutableStateOf("")
+        private set
+    var researchPage by mutableStateOf<String?>(null)
+        private set
+    var reviews by mutableStateOf<List<ReviewEntry>>(emptyList())
+        private set
+
     var pendingMode by mutableStateOf<StudyMode?>(null)
         private set
     @Volatile private var index: WikiIndex? = null
@@ -173,6 +200,11 @@ class StudyController(
     private var chatGeneration = 0
     private var ingestJob: Job? = null
     private var ingestGeneration = 0
+    private var researchJob: Job? = null
+    private var researchGeneration = 0
+    private val researchGate = AtomicInteger(0)
+    private var researchTarget: ReviewEntry? = null
+    private var searxngGeneration = 0
     private var chatQuestion = ""
     private var chatAnswer = ""
     private var chatSources = emptyList<String>()
@@ -182,6 +214,7 @@ class StudyController(
 
     init {
         refresh(honorSaved = true)
+        testSearxng()
     }
 
     fun consumeMode(): StudyMode? {
@@ -259,9 +292,15 @@ class StudyController(
     }
 
     fun saveSettings(next: StudySettings) {
-        appSettings.save(next)
-        settings = next
+        val stored = try {
+            appSettings.save(next)
+        } catch (caught: IllegalArgumentException) {
+            error = caught.message
+            return
+        }
+        settings = stored
         refresh(honorSaved = true)
+        testSearxng()
     }
 
     fun redetect() {
@@ -756,11 +795,192 @@ class StudyController(
         }
     }
 
+    fun canResearchNow(): Boolean = researchBlockReason(
+        searxngStatus,
+        researchPhase,
+        wikiRoot != null,
+        settings.ollamaModel.isNotBlank(),
+    ) == null
+
+    fun researchBlockText(): String? = researchBlockReason(
+        searxngStatus,
+        researchPhase,
+        wikiRoot != null,
+        settings.ollamaModel.isNotBlank(),
+    )
+
+    fun onDeepResearchOpened() {
+        reloadReviews()
+        testSearxng()
+    }
+
+    fun reloadReviews() {
+        val root = wikiRoot
+        if (root == null) {
+            reviews = emptyList()
+            return
+        }
+        scope.launch {
+            val text = withContext(Dispatchers.IO) {
+                readTextIfExists(Path.of(root).resolve("wiki").resolve("review.md")).orEmpty()
+            }
+            if (wikiRoot == root) reviews = parseReviewFile(text)
+        }
+    }
+
+    fun testSearxng() {
+        val url = settings.searxngUrl
+        val gen = ++searxngGeneration
+        searxngStatus = SearxngStatus.Testing
+        scope.launch {
+            val next = withContext(Dispatchers.IO) {
+                try {
+                    SearxngClient(url).testConnection()
+                } catch (caught: Exception) {
+                    SearxngStatus.Failed(caught.message ?: "SearXNG is not reachable.")
+                }
+            }
+            if (gen == searxngGeneration) searxngStatus = next
+        }
+    }
+
+    fun startResearch(entry: ReviewEntry) {
+        if (!canResearchNow()) return
+        if (!researchGate.compareAndSet(0, 1)) return
+        val root = wikiRoot
+        if (root == null) {
+            researchGate.set(0)
+            return
+        }
+        val gen = ++researchGeneration
+        val numCtx = settings.ollamaNumCtx
+        val baseUrl = settings.ollamaBaseUrl
+        val model = settings.ollamaModel
+        val searxng = settings.searxngUrl
+        researchTarget = entry
+        researchHits = emptyList()
+        researchText = ""
+        researchMessage = ""
+        researchPage = null
+        researchPhase = ResearchPhase.Searching
+        researchJob = scope.launch {
+            try {
+                val result = withContext(Dispatchers.IO) {
+                    val runner = ResearchRunner(
+                        prompts = locateAiPrompts(),
+                        numCtx = numCtx,
+                        today = LocalDate.now(),
+                        search = { query -> SearxngClient(searxng).search(query) },
+                        stream = { request, onDelta ->
+                            OllamaClient(baseUrl, model, numCtx).stream(request, onDelta)
+                        },
+                        noteExists = { relative ->
+                            runBlocking(dbDispatcher) { index?.noteExists(relative) == true }
+                        },
+                    )
+                    val indexExcerpt = readTextIfExists(Path.of(root).resolve("wiki").resolve("index.md")).orEmpty()
+                    runner.run(
+                        root = Path.of(root),
+                        entry = entry,
+                        indexExcerpt = indexExcerpt,
+                        cancelled = { gen != researchGeneration },
+                        rootStillOpen = { wikiRoot == root },
+                        beginSaving = { researchGate.compareAndSet(1, 2) },
+                        onUpdate = { update -> publishResearch(gen, update) },
+                    )
+                }
+                if (gen == researchGeneration) applyResearchResult(result, root)
+            } catch (cancel: CancellationException) {
+                throw cancel
+            } catch (caught: Exception) {
+                if (gen == researchGeneration) {
+                    researchPhase = ResearchPhase.Failed
+                    researchMessage = caught.message ?: "Research failed."
+                }
+            } finally {
+                if (gen == researchGeneration) researchGate.set(0)
+            }
+        }
+    }
+
+    fun retryResearch() {
+        val entry = researchTarget ?: return
+        startResearch(entry)
+    }
+
+    fun cancelResearch() {
+        if (!researchGate.compareAndSet(1, 0)) return
+        researchGeneration += 1
+        researchJob?.cancel()
+        researchPhase = ResearchPhase.Idle
+        researchMessage = "已取消。沒有寫入。"
+    }
+
+    fun openResearchedPage() {
+        val path = researchPage ?: return
+        val root = wikiRoot ?: return
+        pendingMode = StudyMode.Browse
+        scope.launch {
+            val indexed = withContext(dbDispatcher) { index?.load(path)?.body.orEmpty() }
+            val text = indexed.ifBlank {
+                withContext(Dispatchers.IO) {
+                    readTextIfExists(Path.of(root).resolve(path)).orEmpty()
+                }
+            }
+            openNote = text
+            previewTitle = path
+        }
+    }
+
+    private fun publishResearch(gen: Int, update: ResearchUpdate) {
+        scope.launch {
+            if (gen != researchGeneration) return@launch
+            if (researchPhase == ResearchPhase.Done || researchPhase == ResearchPhase.Failed) return@launch
+            researchPhase = update.phase
+            researchHits = update.hits
+            researchText = update.synthesis
+        }
+    }
+
+    private suspend fun applyResearchResult(result: ResearchResult, root: String) {
+        when (result) {
+            is ResearchResult.Done -> {
+                researchPhase = ResearchPhase.Done
+                researchPage = result.path
+                researchText = result.synthesis
+                researchMessage = result.path
+                researchTarget = null
+                if (wikiRoot == root) {
+                    val snapshot = withContext(dbDispatcher) {
+                        index?.reconcileAll()
+                        (index?.noteCount() ?: 0) to (index?.listSummaries().orEmpty())
+                    }
+                    noteCount = snapshot.first
+                    summaries = snapshot.second
+                    treeTick += 1
+                    reloadReviews()
+                }
+            }
+            is ResearchResult.Failed -> {
+                researchPhase = ResearchPhase.Failed
+                researchMessage = result.message
+            }
+            ResearchResult.Cancelled -> {
+                researchPhase = ResearchPhase.Idle
+                researchMessage = "已取消。沒有寫入。"
+            }
+        }
+    }
+
     fun close() {
         chatGeneration += 1
         chatJob?.cancel()
         ingestGeneration += 1
         ingestJob?.cancel()
+        researchGeneration += 1
+        researchJob?.cancel()
+        researchGate.set(0)
+        searxngGeneration += 1
         generation += 1
         stopWatcher()
         runBlocking(dbDispatcher) {
@@ -859,8 +1079,7 @@ class StudyController(
 
     private fun persistRoot(path: String) {
         val updated = settings.copy(wikiRootPath = path)
-        appSettings.save(updated)
-        settings = updated
+        settings = appSettings.save(updated)
     }
 
     private fun client(): OllamaClient = OllamaClient(

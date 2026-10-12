@@ -67,6 +67,11 @@ fun HomeScreen(about: AboutRequest) {
             ),
         ),
         MyTopMenuItem(
+            id = "deep-research",
+            label = "深度研究",
+            onClick = { mode = StudyMode.DeepResearch },
+        ),
+        MyTopMenuItem(
             id = "settings",
             label = "Settings",
             onClick = { mode = StudyMode.Settings },

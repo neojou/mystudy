@@ -2,7 +2,7 @@
 
 mystudy 是桌面 Compose 應用。它對本機 Obsidian vault 做 llm-wiki 式筆記，回答與起草都走本機 Ollama。
 
-對齊的是 [llm-wiki](https://github.com/nashsu/llm_wiki) 的目錄與兩段式匯入。預覽 Ingest 走 Analysis 再 Generation，模型輸出 FILE / REVIEW 區塊，本地解析後才寫。沒有移植 embedding、多模態、持久佇列、分塊或 Deep Research。預覽 Ingest 不建 `raw/sources` symlink。
+對齊的是 [llm-wiki](https://github.com/nashsu/llm_wiki) 的目錄與兩段式匯入。預覽 Ingest 走 Analysis 再 Generation，模型輸出 FILE / REVIEW 區塊，本地解析後才寫。深度研究讀 `wiki/review.md`，只把查詢字串送到 loopback SearXNG，再串流綜整成 `wiki/queries/` 的一頁。沒有移植 embedding、多模態、持久佇列或分塊。預覽 Ingest 不建 `raw/sources` symlink。
 
 ## 目標平台
 
@@ -17,14 +17,14 @@ mystudy 是桌面 Compose 應用。它對本機 Obsidian vault 做 llm-wiki 式�
 | `composeApp/src/commonMain/kotlin/com/neojou/mystudy/` | `App`、`HomeScreen`、`StudyMode`、主題、`AppVersion` |
 | `composeApp/src/commonMain/kotlin/com/neojou/tools/` | 日誌、`SystemSettings`、上方選單。這不是產品套件，改名時不動 |
 | `composeApp/src/desktopMain/kotlin/com/neojou/mystudy/` | `Main`、`StudyController`、畫面、整個 `wiki/` |
-| `composeApp/src/desktopTest/` | `WikiBehaviorTest`、`IngestBehaviorTest`、`ChatAgentBehaviorTest`。檢索、prompt 形狀、寫入守衛、Ingest、Chat 工具迴圈的契約在這裡 |
+| `composeApp/src/desktopTest/` | `WikiBehaviorTest`、`IngestBehaviorTest`、`ChatAgentBehaviorTest`、`DeepResearchBehaviorTest`。檢索、prompt 形狀、寫入守衛、Ingest、Chat 工具迴圈、深度研究的契約在這裡 |
 | `ai-prompts/` | 送給模型的 prompt。一個動作一個檔 |
 
-`wiki/` 再分成 agent、ask、ingest、index、markdown、model、ollama、prompt、settings、vault。`wiki/agent/` 是 Chat Agent（協定、`wiki.search`、`wiki.read_page`、迴圈）。檔案系統、SQLite、Ollama 都在 desktopMain，因為它們用的是本機 JVM API。`StudyMode` 在 commonMain。
+`wiki/` 再分成 agent、ask、ingest、research、index、markdown、model、ollama、prompt、settings、vault。`wiki/agent/` 是 Chat Agent（協定、`wiki.search`、`wiki.read_page`、迴圈）。`wiki/research/` 是深度研究（review 解析、SearXNG、寫頁）。檔案系統、SQLite、Ollama、SearXNG 都在 desktopMain，因為它們用的是本機 JVM API。`StudyMode` 在 commonMain。
 
 ## 畫面與狀態
 
-`StudyMode` 有 Home、Browse、Chat、Ask、Settings。Wiki 選單順序是 Browse、Chat、Ask (keyword)。Settings 是上方獨立項目。預覽區的 Ingest 按鈕留在 Home，不在 Wiki 選單裡。沒有 Ingest 模式，也沒有 `IngestPane`。
+`StudyMode` 有 Home、Browse、Chat、Ask、DeepResearch、Settings。Wiki 選單順序是 Browse、Chat、Ask (keyword)。「深度研究」是 Wiki 與 Settings 之間的頂層項目。Settings 是上方獨立項目。預覽區的 Ingest 按鈕留在 Home，不在 Wiki 選單裡。沒有 Ingest 模式，也沒有 `IngestPane`。
 
 `HomeScreen` 左上角打開檔案樹，預設是開的。樹沒有右鍵選單：Compose 的 `ContextMenuArea` 會和列上的點擊搶同一下 pointer down。動作放在預覽區按鈕。樹根標籤用 vault 路徑的最後一段；Settings 顯示完整路徑。
 
@@ -38,9 +38,10 @@ mystudy 是桌面 Compose 應用。它對本機 Obsidian vault 做 llm-wiki 式�
       → Chat：ChatAgent ⇄ WikiTools（WikiSearch / read_page）→ ai-prompts/chat-agent.md → OllamaClient
       → Ask：WikiIndex 本地檢索 → AskPipeline → ai-prompts/ask.md → OllamaClient
       → 預覽 Ingest：IngestPipeline（Analyze → Generate）→ 確認對話框 → applyProposal
+      → 深度研究：ReviewFile → SearxngClient → ai-prompts/deep-research.md → OllamaClient.stream → 頁、index、log、移除 review
 ```
 
-Chat 的工具迴圈、hybrid search 與預算在 `docs/programming/How-To-do-wiki-Chat.md`。Ask 的步驟、切詞與 packet 在 `docs/programming/How-To-do-wiki-Ask.md`。Ingest 的兩次呼叫、路徑守衛與確認寫入在 `docs/programming/How-To-do-Ingest.md`。模型呼叫在 IO。Ingest 讀索引時才回到 `wiki-index`。
+Chat 的工具迴圈、hybrid search 與預算在 `docs/programming/How-To-do-wiki-Chat.md`。Ask 的步驟、切詞與 packet 在 `docs/programming/How-To-do-wiki-Ask.md`。Ingest 的兩次呼叫、路徑守衛與確認寫入在 `docs/programming/How-To-do-Ingest.md`。深度研究的 SearXNG、引用檢查與寫入順序在 `docs/programming/How-To-do-Deep-Research.md`。模型呼叫在 IO。Ingest 讀索引時才回到 `wiki-index`。深度研究的 `noteExists` 也只在 IO 上短暫回到這條 dispatcher。
 
 ## Vault、wiki root、來源
 
@@ -56,7 +57,7 @@ Wiki 頁在 `{wikiRoot}/wiki/`（sources、concepts、entities、queries、index
 
 ## 寫入邊界
 
-`assertWikiWrite` 只允許寫 wiki 頁、`wiki/index.md`、`wiki/log.md` 與 `wiki/review.md`。`wiki/schema.md` 不能從這條路改。`raw/` 不能覆寫。
+`assertWikiWrite` 只允許寫 wiki 頁（含 `wiki/queries/`）、`wiki/index.md`、`wiki/log.md` 與 `wiki/review.md`。`wiki/schema.md` 不能從這條路改。`raw/` 不能覆寫。深度研究的新頁走同一條允許清單，不另外加目錄。
 
 `assertNewRawFile` 仍只允許新建 `raw/sources/` 底下的單一檔名，目的地已存在就拒絕。`linkIntoRawSource` 還在，預覽 Ingest 不呼叫它。確認前這條流程不寫磁碟。
 
@@ -64,12 +65,14 @@ Wiki 頁在 `{wikiRoot}/wiki/`（sources、concepts、entities、queries、index
 
 Ask 用的 SQLite 在 `~/Library/Application Support/mystudy/index/{sha256}.sqlite`。雜湊的是 wiki root canonical 路徑。這個路徑寫死在 macOS 的 Application Support，檔案不進 vault。
 
-偏好在 Java Preferences 節點 `com/neojou/mystudy/wiki`，同樣不進 vault。內容是 vault 路徑、wiki root、Ollama URL、模型、`num_ctx`。預設 URL 是 `http://127.0.0.1:11434/v1`，模型 `gemma4-64k`，`num_ctx` 是 65536。Chat 歷史不在這裡。
+偏好在 Java Preferences 節點 `com/neojou/mystudy/wiki`，同樣不進 vault。內容是 vault 路徑、wiki root、Ollama URL、模型、`num_ctx`、SearXNG URL。預設 URL 是 `http://127.0.0.1:11434/v1`，模型 `gemma4-64k`，`num_ctx` 是 65536，SearXNG 是 `http://127.0.0.1:8080`。Chat 歷史不在這裡。SearXNG 連線狀態也不在這裡。
 
-Ollama 主機必須是 `127.0.0.1` 或 `localhost`。客戶端拿掉 URL 的 `/v1`，改打 native `/api/chat`，這樣才能設 `num_ctx`。`/v1/chat/completions` 設不了 context 長度。
+Ollama 主機必須是 `127.0.0.1` 或 `localhost`。客戶端拿掉 URL 的 `/v1`，改打 native `/api/chat`，這樣才能設 `num_ctx`。`/v1/chat/completions` 設不了 context 長度。深度研究的綜整用同一條 loopback，但是 `stream: true`。`complete()` 仍是 `stream: false`。
+
+SearXNG 是這個 app 唯一的網路出口，而且只送查詢字串。主機同樣必須是 `127.0.0.1` 或 `localhost`。Chat、Ask、Ingest 不呼叫它。
 
 ## Prompt
 
-送給模型的文字在 `ai-prompts/`，一個動作一個檔：`ask.md`、`chat-agent.md`、`ingest-analyze.md`、`ingest-generate.md`。程式每次呼叫前讀檔。第一個區段標記之前的前言，以及區段裡的 `<!-- -->`，不送給模型。格式與佔位見 `ai-prompts/README.md`。
+送給模型的文字在 `ai-prompts/`，一個動作一個檔：`ask.md`、`chat-agent.md`、`ingest-analyze.md`、`ingest-generate.md`、`deep-research.md`。程式每次呼叫前讀檔。第一個區段標記之前的前言，以及區段裡的 `<!-- -->`，不送給模型。格式與佔位見 `ai-prompts/README.md`。
 
-Lexical Ask 與 Ingest 的 `json` 是 false。Chat Agent 的 `json` 是 true，這個旗標在程式裡，不在 prompt 檔。Ingest 的解析契約是 FILE / REVIEW 標記，以及 `OPTIONS:`、`SEARCH:`。Chat Agent 的欄位是 `action`、`tool`、`query`、`path`、`answer`，工具名是 `wiki.search`、`wiki.read_page`。改掉這些名字會讓該輪停下、不寫檔。
+Lexical Ask、Ingest 與深度研究的 `json` 是 false。Chat Agent 的 `json` 是 true，這個旗標在程式裡，不在 prompt 檔。Ingest 的解析契約是 FILE / REVIEW 標記，以及 `OPTIONS:`、`SEARCH:`。深度研究的解析契約是 `[n]`。Chat Agent 的欄位是 `action`、`tool`、`query`、`path`、`answer`，工具名是 `wiki.search`、`wiki.read_page`。改掉這些名字會讓該輪停下、不寫檔。

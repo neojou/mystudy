@@ -42,6 +42,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import com.neojou.mystudy.AppTheme
 import com.neojou.mystudy.AppVersion
 import com.neojou.mystudy.wiki.index.NoteSummary
+import com.neojou.mystudy.wiki.research.formatSearxngStatus
 import java.nio.file.Path
 import kotlin.io.path.isDirectory
 
@@ -259,12 +260,14 @@ fun SettingsPane(controller: StudyController, modifier: Modifier = Modifier) {
     var url by remember { mutableStateOf(current.ollamaBaseUrl) }
     var model by remember { mutableStateOf(current.ollamaModel) }
     var ctx by remember { mutableStateOf(current.ollamaNumCtx.toString()) }
+    var searxng by remember { mutableStateOf(current.searxngUrl) }
     var localError by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(current) {
         vault = current.vaultPath
         url = current.ollamaBaseUrl
         model = current.ollamaModel
         ctx = current.ollamaNumCtx.toString()
+        searxng = current.searxngUrl
     }
     Column(
         modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
@@ -274,6 +277,21 @@ fun SettingsPane(controller: StudyController, modifier: Modifier = Modifier) {
         OutlinedTextField(url, { url = it }, modifier = Modifier.fillMaxWidth(), label = { Text("Ollama URL") })
         OutlinedTextField(model, { model = it }, modifier = Modifier.fillMaxWidth(), label = { Text("Model") })
         OutlinedTextField(ctx, { ctx = it }, modifier = Modifier.fillMaxWidth(), label = { Text("num_ctx") })
+        OutlinedTextField(
+            searxng,
+            { searxng = it },
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text("SearXNG URL") },
+            singleLine = true,
+        )
+        Text(
+            "Research uses the saved URL. Leave it blank to restore http://127.0.0.1:8080. The host must be loopback.",
+            style = MaterialTheme.typography.bodySmall,
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            TextButton(onClick = controller::testSearxng) { Text("測試連線") }
+            Text(formatSearxngStatus(controller.searxngStatus), style = MaterialTheme.typography.bodySmall)
+        }
         Text(
             "num_ctx 65536 reserves a large context on a 24GB Mac. A failed load is shown. The app does not lower it.",
             style = MaterialTheme.typography.bodySmall,
@@ -293,6 +311,7 @@ fun SettingsPane(controller: StudyController, modifier: Modifier = Modifier) {
                         ollamaBaseUrl = url.trim(),
                         ollamaModel = model.trim(),
                         ollamaNumCtx = parsed,
+                        searxngUrl = searxng,
                     ),
                 )
             }) { Text("Save") }
