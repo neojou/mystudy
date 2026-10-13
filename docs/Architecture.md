@@ -64,15 +64,17 @@ Wiki 頁在 `{wikiRoot}/wiki/`（sources、concepts、entities、queries、index
 
 `assertNewRawFile` 仍只允許新建 `raw/sources/` 底下的單一檔名，目的地已存在就拒絕。`linkIntoRawSource` 還在。預設的預覽 Ingest 不呼叫它，確認前不寫磁碟。Settings 選 Symbolic link only 時，按鈕只呼叫它，立刻寫那條 link，不打模型。
 
+手動編輯走另一條 `assertNoteEdit`（`wiki/vault/WriteGuard.kt` 與 `NoteFiles.kt`）。它只放行 vault 內既有的 `.md`、`.markdown`、`.txt`，含 `assertWikiWrite` 會拒絕的巢狀 `wiki/*.md`，以及 wiki root 外的筆記。`raw/`、`wiki/schema.md`、點開頭目錄、symlink 仍拒絕。`wiki/index.md`、`log.md`、`review.md` 可編，但畫面上有維護警示。讀寫在 IO，不佔 `wiki-index`；只有詞彙上位於 `wiki/` 且檔名剛好以 `.md` 結尾的存檔，才回到那條 dispatcher 呼叫 `reindexRelative`。不打模型，不連網，不寫 `wiki/log.md`。細節在 `docs/programming/How-To-do-Note-Editor.md`。
+
 ## 索引、偏好、Ollama
 
 Ask 用的 SQLite 在 `~/Library/Application Support/mystudy/index/{sha256}.sqlite`。雜湊的是 wiki root canonical 路徑。這個路徑寫死在 macOS 的 Application Support，檔案不進 vault。
 
-偏好在 Java Preferences 節點 `com/neojou/mystudy/wiki`，同樣不進 vault。內容是 vault 路徑、wiki root、Ollama URL、模型、`num_ctx`、SearXNG URL、Ingest 模式、`lintSemantic`。預設 URL 是 `http://127.0.0.1:11434/v1`，模型 `gemma4-64k`，`num_ctx` 是 65536，SearXNG 是 `http://127.0.0.1:8080`。Ingest 模式預設是 `analyze`（分析與產生，不建 link）；`link` 是只建 `raw/sources/` 的相對 symlink。缺鍵或不認得的值都當成 `analyze`。`lintSemantic` 只有字串 `true` 算勾選，預設不勾。忽略頁是另一把鍵 `lintIgnore.` 加上 wiki root canonical 路徑的 SHA-256，不跟 `StudySettings` 一起存。Chat 歷史不在這裡。Lint 結果只在記憶體。SearXNG 連線狀態也不在這裡。
+偏好在 Java Preferences 節點 `com/neojou/mystudy/wiki`，同樣不進 vault。內容是 vault 路徑、wiki root、Ollama URL、模型、`num_ctx`、SearXNG URL、Ingest 模式、`lintSemantic`、`noteAutosave`。預設 URL 是 `http://127.0.0.1:11434/v1`，模型 `gemma4-64k`，`num_ctx` 是 65536，SearXNG 是 `http://127.0.0.1:8080`。Ingest 模式預設是 `analyze`（分析與產生，不建 link）；`link` 是只建 `raw/sources/` 的相對 symlink。缺鍵或不認得的值都當成 `analyze`。`lintSemantic` 與 `noteAutosave` 只有字串 `true` 算勾選，預設不勾。忽略頁是另一把鍵 `lintIgnore.` 加上 wiki root canonical 路徑的 SHA-256，不跟 `StudySettings` 一起存。`save(StudySettings)` 會寫 `noteAutosave`，不碰 `lintIgnore`。Chat 歷史不在這裡。Lint 結果只在記憶體。SearXNG 連線狀態也不在這裡。筆記編輯的草稿與衝突狀態只在記憶體。
 
 Ollama 主機必須是 `127.0.0.1` 或 `localhost`。客戶端拿掉 URL 的 `/v1`，改打 native `/api/chat`，這樣才能設 `num_ctx`。`/v1/chat/completions` 設不了 context 長度。深度研究的綜整用同一條 loopback，但是 `stream: true`。Wiki Lint 的語意健檢用 `complete()`，`stream: false`。`complete()` 仍是 `stream: false`。
 
-SearXNG 是這個 app 唯一的網路出口，而且只送查詢字串。主機同樣必須是 `127.0.0.1` 或 `localhost`。Chat、Ask、Ingest、Wiki Lint 不呼叫它。Lint 只把 SEARCH 字串寫進 review。
+SearXNG 是這個 app 唯一的網路出口，而且只送查詢字串。主機同樣必須是 `127.0.0.1` 或 `localhost`。Chat、Ask、Ingest、Wiki Lint、筆記編輯不呼叫它。Lint 只把 SEARCH 字串寫進 review。
 
 ## Prompt
 

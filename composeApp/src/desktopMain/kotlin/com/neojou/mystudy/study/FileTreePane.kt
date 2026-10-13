@@ -33,7 +33,9 @@ import kotlin.io.path.name
  * (for example `第二大腦`), never the absolute path. The full path stays in Settings.
  * Rows under `{wikiRoot}/wiki/` and `{wikiRoot}/raw/` are tinted.
  * The ` · wiki` mark sits on the `wiki/` folder, not on the vault root.
- * Clicking a file opens it on the right; Ingest is a button there.
+ * Clicking a file opens it in the preview on the right.
+ * Reading, editing, saving, and copying are buttons in that preview.
+ * The tree has no context menu.
  */
 @Composable
 fun FileTreePane(
@@ -70,7 +72,7 @@ fun FileTreePane(
                 val key = target.toString()
                 expanded = if (key in expanded) expanded - key else expanded + key
             },
-            onOpen = controller::previewFile,
+            onOpen = controller::requestOpen,
         )
     }
 }

@@ -10,6 +10,7 @@ import androidx.compose.ui.window.MenuBar
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.WindowState
 import androidx.compose.ui.window.rememberWindowState
+import com.neojou.mystudy.study.EditorChrome
 import java.awt.EventQueue
 import java.awt.event.WindowAdapter
 import java.awt.event.WindowEvent
@@ -68,6 +69,7 @@ private fun FrameWindowScope.WindowsMenu(
         val listener = object : WindowAdapter() {
             override fun windowGainedFocus(event: WindowEvent) {
                 created.focused = true
+                EditorChrome.onWindowFocus()
             }
 
             override fun windowLostFocus(event: WindowEvent) {

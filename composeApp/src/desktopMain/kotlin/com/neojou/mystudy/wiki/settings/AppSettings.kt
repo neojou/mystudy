@@ -15,6 +15,7 @@ data class StudySettings(
     val searxngUrl: String,
     val ingestMode: IngestMode = IngestMode.Analyze,
     val lintSemantic: Boolean = false,
+    val noteAutosave: Boolean = false,
 )
 
 interface SettingsStore {
@@ -62,6 +63,7 @@ class AppSettings(private val store: SettingsStore) {
         searxngUrl = store.get(KEY_SEARXNG_URL, DEFAULT_SEARXNG_URL).ifBlank { DEFAULT_SEARXNG_URL },
         ingestMode = ingestModeFromStored(store.get(KEY_INGEST_MODE, "analyze")),
         lintSemantic = store.get(KEY_LINT_SEMANTIC, "false") == "true",
+        noteAutosave = store.get(KEY_NOTE_AUTOSAVE, "false") == "true",
     )
 
     /** Ignore paths for one wiki root. Not written by [save]. */
@@ -82,6 +84,7 @@ class AppSettings(private val store: SettingsStore) {
         store.put(KEY_SEARXNG_URL, searxngUrl)
         store.put(KEY_INGEST_MODE, settings.ingestMode.storedValue())
         store.put(KEY_LINT_SEMANTIC, if (settings.lintSemantic) "true" else "false")
+        store.put(KEY_NOTE_AUTOSAVE, if (settings.noteAutosave) "true" else "false")
         return settings.copy(searxngUrl = searxngUrl)
     }
 
@@ -129,6 +132,7 @@ class AppSettings(private val store: SettingsStore) {
         private const val KEY_SEARXNG_URL = "searxngUrl"
         private const val KEY_INGEST_MODE = "ingestMode"
         private const val KEY_LINT_SEMANTIC = "lintSemantic"
+        private const val KEY_NOTE_AUTOSAVE = "noteAutosave"
 
         private fun lintIgnoreKey(rootPath: String): String {
             val canonicalPath = canonical(Path.of(rootPath)).toString()

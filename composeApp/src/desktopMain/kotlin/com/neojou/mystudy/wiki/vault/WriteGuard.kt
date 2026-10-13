@@ -39,6 +39,24 @@ fun assertNewRawFile(root: Path, relative: String): Path {
     return target
 }
 
+/**
+ * Manual edit of an existing vault note. This is separate from [assertWikiWrite].
+ * A read-only path throws. [mustExist] is false only when recreating a deleted note in place.
+ */
+fun noteEditPermission(vault: Path, wikiRoot: Path?, file: Path): EditPermission {
+    val structural = classifyNote(vault, wikiRoot, file)
+    if (structural is EditPermission.ReadOnly) return structural
+    val absolute = file.toAbsolutePath().normalize()
+    val size = Files.size(absolute)
+    if (size > NOTE_MAX_BYTES) return EditPermission.ReadOnly(NOTE_REASON_LARGE)
+    val bytes = Files.readAllBytes(absolute)
+    if (decodeNoteUtf8(bytes) == null) return EditPermission.ReadOnly(NOTE_REASON_UTF8)
+    return structural
+}
+
+fun assertNoteEdit(vault: Path, wikiRoot: Path?, file: Path, mustExist: Boolean = true): Path =
+    assertClassifiedNote(vault, wikiRoot, file, mustExist)
+
 private fun isPageFile(relative: String): Boolean {
     val parts = relative.split('/')
     if (parts.size != 3) return false

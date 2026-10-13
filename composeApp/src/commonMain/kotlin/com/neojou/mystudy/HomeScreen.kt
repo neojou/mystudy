@@ -50,6 +50,7 @@ private const val TAG = "Home"
 @Composable
 fun HomeScreen(about: AboutRequest) {
     var mode by remember { mutableStateOf(StudyMode.Home) }
+    var requestedMode by remember { mutableStateOf<StudyMode?>(null) }
     var fileBrowserOpen by remember { mutableStateOf(true) }
     val topMenus = listOf(
         MyTopMenuItem(
@@ -61,21 +62,21 @@ fun HomeScreen(about: AboutRequest) {
             id = "wiki",
             label = "Wiki",
             children = listOf(
-                MyTopMenuItem(id = "browse", label = "Browse", onClick = { mode = StudyMode.Browse }),
-                MyTopMenuItem(id = "chat", label = "Chat", onClick = { mode = StudyMode.Chat }),
-                MyTopMenuItem(id = "ask", label = "Ask (keyword)", onClick = { mode = StudyMode.Ask }),
-                MyTopMenuItem(id = "lint", label = "Lint（自動健檢 wiki）", onClick = { mode = StudyMode.Lint }),
+                MyTopMenuItem(id = "browse", label = "Browse", onClick = { requestedMode = StudyMode.Browse }),
+                MyTopMenuItem(id = "chat", label = "Chat", onClick = { requestedMode = StudyMode.Chat }),
+                MyTopMenuItem(id = "ask", label = "Ask (keyword)", onClick = { requestedMode = StudyMode.Ask }),
+                MyTopMenuItem(id = "lint", label = "Lint（自動健檢 wiki）", onClick = { requestedMode = StudyMode.Lint }),
             ),
         ),
         MyTopMenuItem(
             id = "deep-research",
             label = "深度研究",
-            onClick = { mode = StudyMode.DeepResearch },
+            onClick = { requestedMode = StudyMode.DeepResearch },
         ),
         MyTopMenuItem(
             id = "settings",
             label = "Settings",
-            onClick = { mode = StudyMode.Settings },
+            onClick = { requestedMode = StudyMode.Settings },
         ),
     )
 
@@ -97,8 +98,10 @@ fun HomeScreen(about: AboutRequest) {
     ) { innerPadding ->
         StudyPane(
             mode = mode,
+            requestedMode = requestedMode,
             fileBrowserOpen = fileBrowserOpen,
             onMode = { mode = it },
+            onRequestHandled = { requestedMode = null },
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding),

@@ -181,6 +181,66 @@ fun ConfirmWriteDialog(
     }
 }
 
+@Composable
+fun NoteUnsavedDialog(
+    saving: Boolean,
+    onSave: () -> Unit,
+    onDiscard: () -> Unit,
+    onCancel: () -> Unit,
+) {
+    Dialog(onDismissRequest = { if (!saving) onCancel() }) {
+        Surface(shape = MaterialTheme.shapes.large) {
+            Column(
+                Modifier.widthIn(min = 360.dp, max = 520.dp).padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text("尚未存檔", style = MaterialTheme.typography.titleMedium)
+                Text("這則筆記有未儲存的變更。")
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = onSave, enabled = !saving) { Text("存檔") }
+                    Button(onClick = onDiscard, enabled = !saving) { Text("捨棄") }
+                    TextButton(onClick = onCancel, enabled = !saving) { Text("取消") }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun NoteConflictDialog(
+    deleted: Boolean,
+    onReload: () -> Unit,
+    onOverwrite: () -> Unit,
+    onRecreate: () -> Unit,
+    onCancel: () -> Unit,
+) {
+    Dialog(onDismissRequest = onCancel) {
+        Surface(shape = MaterialTheme.shapes.large) {
+            Column(
+                Modifier.widthIn(min = 360.dp, max = 560.dp).padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                if (deleted) {
+                    Text("檔案已刪除", style = MaterialTheme.typography.titleMedium)
+                    Text("磁碟上的檔案已經不在。可以在原路徑重新建立並寫入。")
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(onClick = onRecreate) { Text("重新建立並寫入") }
+                        TextButton(onClick = onCancel) { Text("取消") }
+                    }
+                } else {
+                    Text("磁碟上的檔案已變更", style = MaterialTheme.typography.titleMedium)
+                    Text("開啟之後，檔案被另外寫過。沒有自動合併。")
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(onClick = onReload) { Text("重新載入磁碟版本") }
+                        Button(onClick = onOverwrite) { Text("用我的版本覆寫") }
+                        TextButton(onClick = onCancel) { Text("取消") }
+                    }
+                }
+            }
+        }
+    }
+}
+
 private fun reviewBodyPreview(body: String): String = body.lineSequence()
     .filter { line ->
         val trimmed = line.trim()

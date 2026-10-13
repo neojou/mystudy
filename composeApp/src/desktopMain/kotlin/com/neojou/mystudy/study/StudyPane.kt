@@ -19,23 +19,49 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
 import com.neojou.mystudy.wiki.settings.PreferencesSettingsStore
 
 @Composable
 actual fun StudyPane(
     mode: StudyMode,
+    requestedMode: StudyMode?,
     fileBrowserOpen: Boolean,
     onMode: (StudyMode) -> Unit,
+    onRequestHandled: () -> Unit,
     modifier: Modifier,
 ) {
     val scope = rememberCoroutineScope()
+    val clipboard = LocalClipboardManager.current
     val controller = remember { StudyController(PreferencesSettingsStore(), scope) }
     DisposableEffect(controller) {
-        onDispose { controller.close() }
+        EditorChrome.bind(
+            onClose = controller::requestClose,
+            onFocus = controller::onWindowFocus,
+        )
+        onDispose {
+            EditorChrome.unbind()
+            controller.close()
+        }
     }
     LaunchedEffect(controller.pendingMode) {
         controller.consumeMode()?.let(onMode)
+    }
+    LaunchedEffect(requestedMode) {
+        val target = requestedMode ?: return@LaunchedEffect
+        onRequestHandled()
+        if (target == mode) return@LaunchedEffect
+        if (controller.requestMode(target)) onMode(target)
+    }
+    LaunchedEffect(controller.approvedMode) {
+        val next = controller.consumeApprovedMode() ?: return@LaunchedEffect
+        onMode(next)
+    }
+    LaunchedEffect(controller.noteClipboard) {
+        val text = controller.consumeNoteClipboard() ?: return@LaunchedEffect
+        clipboard.setText(AnnotatedString(text))
     }
     Column(modifier) {
         controller.error?.let { message ->
@@ -90,6 +116,24 @@ actual fun StudyPane(
             proposal = proposal,
             onWrite = controller::confirmWrites,
             onDismiss = controller::dismissProposal,
+        )
+    }
+    val notePhase = controller.notePhase
+    if (controller.notePending != null && notePhase !is NotePhase.Conflict) {
+        NoteUnsavedDialog(
+            saving = notePhase is NotePhase.Saving,
+            onSave = controller::confirmLeaveSave,
+            onDiscard = controller::confirmLeaveDiscard,
+            onCancel = controller::cancelLeave,
+        )
+    }
+    if (notePhase is NotePhase.Conflict) {
+        NoteConflictDialog(
+            deleted = notePhase.deleted,
+            onReload = controller::reloadFromConflict,
+            onOverwrite = controller::overwriteNote,
+            onRecreate = controller::recreateNote,
+            onCancel = controller::cancelConflict,
         )
     }
 }

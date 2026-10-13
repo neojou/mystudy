@@ -6,6 +6,7 @@ import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
+import com.neojou.mystudy.study.EditorChrome
 import java.awt.Desktop
 import java.awt.EventQueue
 
@@ -32,9 +33,10 @@ fun main() {
         val windowState = rememberWindowState(
             size = DpSize(960.dp, 640.dp),
         )
+        val title = if (EditorChrome.dirty) "${AppVersion.APP_NAME} ●" else AppVersion.APP_NAME
         AppWindow(
-            onCloseRequest = ::exitApplication,
-            title = AppVersion.APP_NAME,
+            onCloseRequest = { EditorChrome.requestClose(::exitApplication) },
+            title = title,
             state = windowState,
         ) {
             App(about)

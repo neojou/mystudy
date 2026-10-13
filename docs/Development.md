@@ -20,9 +20,9 @@
 ./gradlew :composeApp:desktopTest
 ```
 
-行為契約在 `composeApp/src/desktopTest/kotlin/com/neojou/mystudy/wiki/WikiBehaviorTest.kt`、`IngestBehaviorTest.kt`、`ChatAgentBehaviorTest.kt`、`DeepResearchBehaviorTest.kt` 與 `WikiLintBehaviorTest.kt`。改檢索、送出的 prompt 形狀、ingest 的寫入守衛、Chat 的工具迴圈、深度研究的搜尋與寫入、Wiki Lint 的規則與寫入時，測試一起改。文件與測試不一致時，以測試與目前程式為準，再把文件改到一致。
+行為契約在 `composeApp/src/desktopTest/kotlin/com/neojou/mystudy/wiki/WikiBehaviorTest.kt`、`IngestBehaviorTest.kt`、`ChatAgentBehaviorTest.kt`、`DeepResearchBehaviorTest.kt`、`WikiLintBehaviorTest.kt` 與 `NoteEditorBehaviorTest.kt`。改檢索、送出的 prompt 形狀、ingest 的寫入守衛、Chat 的工具迴圈、深度研究的搜尋與寫入、Wiki Lint 的規則與寫入、筆記編輯的守門與存檔時，測試一起改。文件與測試不一致時，以測試與目前程式為準，再把文件改到一致。
 
-Lexical Ask 的測試鎖了哪些句子，見 `docs/programming/How-To-do-wiki-Ask.md`。Chat Agent 的測試鎖了哪些查詢與預算，見 `docs/programming/How-To-do-wiki-Chat.md`。Ingest 的測試鎖了哪些路徑，見 `docs/programming/How-To-do-Ingest.md`。深度研究的測試鎖了哪些引用與寫入，見 `docs/programming/How-To-do-Deep-Research.md`。Wiki Lint 的測試鎖了哪些規則與批次，見 `docs/programming/How-To-do-Wiki-Lint.md`。
+Lexical Ask 的測試鎖了哪些句子，見 `docs/programming/How-To-do-wiki-Ask.md`。Chat Agent 的測試鎖了哪些查詢與預算，見 `docs/programming/How-To-do-wiki-Chat.md`。Ingest 的測試鎖了哪些路徑，見 `docs/programming/How-To-do-Ingest.md`。深度研究的測試鎖了哪些引用與寫入，見 `docs/programming/How-To-do-Deep-Research.md`。Wiki Lint 的測試鎖了哪些規則與批次，見 `docs/programming/How-To-do-Wiki-Lint.md`。筆記編輯的測試鎖了哪些路徑與存檔，見 `docs/programming/How-To-do-Note-Editor.md`。
 
 ## 打包時的 prompt
 

@@ -63,9 +63,15 @@ import com.neojou.mystudy.wiki.vault.applyProposal
 import com.neojou.mystudy.wiki.vault.discoverWikiRoot
 import com.neojou.mystudy.wiki.vault.ingestTargets
 import com.neojou.mystudy.wiki.vault.linkIntoRawSource
-import com.neojou.mystudy.wiki.vault.readCapped
+import com.neojou.mystudy.wiki.vault.EditPermission
+import com.neojou.mystudy.wiki.vault.LoadedNote
+import com.neojou.mystudy.wiki.vault.SaveOutcome
+import com.neojou.mystudy.wiki.vault.loadNote
+import com.neojou.mystudy.wiki.vault.noteFileSha256
 import com.neojou.mystudy.wiki.vault.readTextIfExists
+import com.neojou.mystudy.wiki.vault.saveNote as writeNote
 import com.neojou.mystudy.wiki.vault.scaffoldWiki
+import com.neojou.mystudy.wiki.vault.wikiIndexRelative
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -77,6 +83,8 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.nio.file.Files
 import java.nio.file.Path
@@ -138,6 +146,38 @@ class StudyController(
     var previewTitle by mutableStateOf("")
         private set
     var previewBody by mutableStateOf("")
+        private set
+    var noteDraft by mutableStateOf("")
+        private set
+    var noteMode by mutableStateOf(NoteViewMode.Reading)
+        private set
+    var notePhase by mutableStateOf<NotePhase>(NotePhase.Clean)
+        private set
+    var notePending by mutableStateOf<PendingNav?>(null)
+        private set
+    var noteDirty by mutableStateOf(false)
+        private set
+    var noteCanEdit by mutableStateOf(false)
+        private set
+    var noteWarning by mutableStateOf<String?>(null)
+        private set
+    var noteExternal by mutableStateOf(false)
+        private set
+    var noteMixed by mutableStateOf(false)
+        private set
+    var noteStatus by mutableStateOf("")
+        private set
+    var noteUnreadable by mutableStateOf(false)
+        private set
+    var noteLoading by mutableStateOf(false)
+        private set
+    var noteNotice by mutableStateOf("")
+        private set
+    var editorEpoch by mutableStateOf(0)
+        private set
+    var approvedMode by mutableStateOf<StudyMode?>(null)
+        private set
+    var noteClipboard by mutableStateOf<String?>(null)
         private set
 
     var ingestMessage by mutableStateOf("")
@@ -254,6 +294,12 @@ class StudyController(
     private var watcher: WikiWatcher? = null
     private var debounce: Job? = null
     private var generation = 0
+    private val noteSession = NoteSession()
+    private val saveMutex = Mutex()
+    private var autosaveJob: Job? = null
+    private var loadToken = 0
+    private var saveEpoch = 0
+    private var closeAction: (() -> Unit)? = null
 
     init {
         refresh(honorSaved = true)
@@ -304,6 +350,7 @@ class StudyController(
                     is Discovery.Many -> {
                         closeIndex()
                         wikiRoot = null
+                        resetNote()
                         rootChoices = discovery.roots.map { it.toString() }
                         status = "Several wiki roots found. Choose one."
                     }
@@ -446,19 +493,181 @@ class StudyController(
         }
     }
 
+    fun requestOpen(path: Path) {
+        if (sameNotePath(previewPath, path)) return
+        if (noteSession.requestLeave(PendingNav.OpenFile(path))) {
+            publishNote()
+            return
+        }
+        previewFile(path)
+    }
+
     fun previewFile(path: Path) {
         val cancelIngest = ingestJob?.isActive == true
         ingestGeneration += 1
         ingestJob?.cancel()
         if (cancelIngest) busy = false
         proposal = null
+        val token = ++loadToken
+        noteSession.generation = token
+        editorEpoch++
+        noteLoading = true
+        noteNotice = ""
+        autosaveJob?.cancel()
         previewPath = path
         previewTitle = path.fileName?.toString() ?: path.toString()
+        previewBody = ""
         ingestMessage = ""
+        noteSession.path = path
+        noteSession.draft = ""
+        noteSession.loadedText = ""
+        noteSession.base = null
+        noteSession.permission = EditPermission.ReadOnly("")
+        noteSession.mode = NoteViewMode.Reading
+        noteSession.phase = NotePhase.Clean
+        noteSession.externalChange = false
+        noteSession.pendingNav = null
         pendingMode = StudyMode.Home
+        publishNote()
+        val vault = Path.of(settings.vaultPath)
+        val root = wikiRoot?.let(Path::of)
         scope.launch {
-            previewBody = withContext(Dispatchers.IO) { readPreview(path) }
+            val loaded = try {
+                withContext(Dispatchers.IO) { loadNote(vault, root, path) }
+            } catch (caught: Exception) {
+                LoadedNote.Unreadable(caught.message ?: "無法讀取")
+            }
+            if (token != loadToken) return@launch
+            noteLoading = false
+            noteSession.open(path, loaded, token)
+            editorEpoch++
+            publishNote()
         }
+    }
+
+    fun requestMode(mode: StudyMode): Boolean {
+        if (noteSession.requestLeave(PendingNav.SwitchMode(mode))) {
+            publishNote()
+            return false
+        }
+        return true
+    }
+
+    fun requestClose(exit: () -> Unit) {
+        if (noteSession.requestLeave(PendingNav.CloseWindow)) {
+            closeAction = exit
+            publishNote()
+            return
+        }
+        exit()
+    }
+
+    fun requestIngest() {
+        if (previewPath == null) return
+        if (noteSession.requestLeave(PendingNav.RunIngest)) {
+            publishNote()
+            return
+        }
+        ingestPreview()
+    }
+
+    fun toggleNoteMode() {
+        if (noteSession.permission !is EditPermission.Editable) return
+        noteSession.mode = if (noteSession.mode == NoteViewMode.Reading) {
+            NoteViewMode.Editing
+        } else {
+            NoteViewMode.Reading
+        }
+        publishNote()
+        checkExternal()
+    }
+
+    fun showReading() {
+        if (noteSession.mode == NoteViewMode.Reading) return
+        noteSession.mode = NoteViewMode.Reading
+        publishNote()
+        checkExternal()
+    }
+
+    fun showEditing() {
+        if (noteSession.permission !is EditPermission.Editable) return
+        if (noteSession.mode == NoteViewMode.Editing) return
+        noteSession.mode = NoteViewMode.Editing
+        publishNote()
+        checkExternal()
+    }
+
+    fun setNoteDraft(epoch: Int, text: String) {
+        if (epoch != editorEpoch) return
+        if (text == noteSession.draft) return
+        noteSession.draft = text
+        if (noteSession.phase !is NotePhase.Conflict) {
+            noteSession.phase = if (noteSession.dirty) NotePhase.Dirty else NotePhase.Clean
+        }
+        noteNotice = ""
+        publishNote()
+        scheduleAutosave()
+    }
+
+    fun saveNote() {
+        scope.launch { performSave(force = false, recreate = false) }
+    }
+
+    fun overwriteNote() {
+        scope.launch { performSave(force = true, recreate = false) }
+    }
+
+    fun recreateNote() {
+        scope.launch { performSave(force = true, recreate = true) }
+    }
+
+    fun confirmLeaveSave() {
+        scope.launch { performSave(force = false, recreate = false) }
+    }
+
+    fun confirmLeaveDiscard() {
+        val nav = noteSession.discardAndProceed() ?: return
+        editorEpoch++
+        noteNotice = ""
+        publishNote()
+        performNav(nav)
+    }
+
+    fun cancelLeave() {
+        noteSession.cancelLeave()
+        closeAction = null
+        publishNote()
+    }
+
+    fun cancelConflict() {
+        noteSession.cancelLeave()
+        closeAction = null
+        noteSession.phase = if (noteSession.dirty) NotePhase.Dirty else NotePhase.Clean
+        publishNote()
+    }
+
+    fun reloadFromBanner() {
+        reloadDiscarding(proceed = false)
+    }
+
+    fun reloadFromConflict() {
+        reloadDiscarding(proceed = noteSession.pendingNav != null)
+    }
+
+    fun consumeApprovedMode(): StudyMode? {
+        val mode = approvedMode
+        approvedMode = null
+        return mode
+    }
+
+    fun consumeNoteClipboard(): String? {
+        val text = noteClipboard
+        noteClipboard = null
+        return text
+    }
+
+    fun onWindowFocus() {
+        checkExternal()
     }
 
     fun canIngestPreview(): Boolean {
@@ -1314,6 +1523,9 @@ class StudyController(
         researchGate.set(0)
         searxngGeneration += 1
         generation += 1
+        loadToken += 1
+        autosaveJob?.cancel()
+        EditorChrome.dirty = false
         stopWatcher()
         runBlocking(dbDispatcher) {
             index?.close()
@@ -1326,6 +1538,7 @@ class StudyController(
         closeIndex()
         wikiRoot = null
         resetLint(null)
+        resetNote()
         showCreate = false
         noteCount = 0
         summaries = emptyList()
@@ -1337,6 +1550,7 @@ class StudyController(
         closeIndex()
         wikiRoot = null
         resetLint(null)
+        resetNote()
         noteCount = 0
         summaries = emptyList()
         status = "No wiki root in this vault."
@@ -1361,7 +1575,14 @@ class StudyController(
             }
             val count = withContext(dbDispatcher) { opened.noteCount() }
             val listed = withContext(dbDispatcher) { opened.listSummaries() }
+            val previousRoot = wikiRoot
+            val openPath = noteSession.path
             wikiRoot = root.toString()
+            if (openPath != null && previousRoot != root.toString()) {
+                if (previousRoot == null) previewFile(openPath) else resetNote()
+            } else if (openPath != null) {
+                checkExternal()
+            }
             lintIgnoreText = appSettings.lintIgnore(root.toString())
             noteCount = count
             summaries = listed
@@ -1400,6 +1621,13 @@ class StudyController(
                 } ?: return@launch
                 noteCount = snapshot.first
                 summaries = snapshot.second
+                val rootPath = wikiRoot?.let(Path::of)
+                val openRelative = rootPath?.let { root ->
+                    noteSession.path?.let { wikiIndexRelative(root, it) }
+                }
+                if (relative == null || (openRelative != null && openRelative == relative)) {
+                    checkExternal()
+                }
             }
         }
         watcher = created
@@ -1424,13 +1652,231 @@ class StudyController(
         numCtx = settings.ollamaNumCtx,
     )
 
-    private fun readPreview(path: Path): String = try {
-        if (!Files.isRegularFile(path)) "Select a file."
-        else {
-            val text = readCapped(path, 100_000)
-            if (text.truncated) text.text + "\n… truncated" else text.text
+    private fun scheduleAutosave() {
+        autosaveJob?.cancel()
+        if (!settings.noteAutosave) return
+        if (!noteSession.dirty) return
+        if (noteSession.phase is NotePhase.Conflict || noteSession.phase is NotePhase.Saving) return
+        if (noteSession.permission !is EditPermission.Editable) return
+        val epoch = editorEpoch
+        autosaveJob = scope.launch {
+            delay(2_000)
+            if (epoch != editorEpoch) return@launch
+            if (noteSession.phase is NotePhase.Conflict) return@launch
+            if (!noteSession.dirty) return@launch
+            performSave(force = false, recreate = false)
         }
-    } catch (_: Exception) {
-        "Cannot read this file as UTF-8."
+    }
+
+    private suspend fun performSave(force: Boolean, recreate: Boolean) {
+        autosaveJob?.cancel()
+        val path = noteSession.path ?: return
+        val token = loadToken
+        val editorText = noteSession.draft
+        val loadedText = noteSession.loadedText
+        val base = noteSession.base ?: return
+        if (noteSession.permission !is EditPermission.Editable) return
+        val vault = Path.of(settings.vaultPath)
+        val root = wikiRoot?.let(Path::of)
+        saveMutex.withLock {
+            if (token != loadToken) return@withLock
+            saveEpoch++
+            noteSession.phase = NotePhase.Saving
+            publishNote()
+            val outcome = withContext(Dispatchers.IO) {
+                writeNote(
+                    vault = vault,
+                    wikiRoot = root,
+                    file = path,
+                    editorText = editorText,
+                    loadedText = loadedText,
+                    base = base,
+                    force = force,
+                    recreate = recreate,
+                )
+            }
+            if (token != loadToken) return@withLock
+            when (outcome) {
+                SaveOutcome.Unchanged -> {
+                    noteSession.phase = if (noteSession.dirty) NotePhase.Dirty else NotePhase.Clean
+                    publishNote()
+                    if (!noteSession.dirty) proceedPending()
+                }
+                is SaveOutcome.Saved -> {
+                    noteSession.markSaved(outcome.snapshot, editorText)
+                    publishNote()
+                    reindexSaved(root, path)
+                    if (!noteSession.dirty) proceedPending()
+                }
+                is SaveOutcome.Conflict -> {
+                    noteSession.markConflict(outcome.deleted)
+                    publishNote()
+                }
+                is SaveOutcome.Failed -> {
+                    noteSession.markFailed(outcome.message)
+                    publishNote()
+                }
+            }
+        }
+    }
+
+    private suspend fun reindexSaved(root: Path?, path: Path) {
+        if (root == null) return
+        val relative = wikiIndexRelative(root, path) ?: return
+        val snapshot = withContext(dbDispatcher) {
+            val current = index ?: return@withContext null
+            current.reindexRelative(relative)
+            current.noteCount() to current.listSummaries()
+        } ?: return
+        noteCount = snapshot.first
+        summaries = snapshot.second
+        treeTick += 1
+    }
+
+    private fun proceedPending() {
+        val nav = noteSession.pendingNav ?: return
+        noteSession.pendingNav = null
+        publishNote()
+        performNav(nav)
+    }
+
+    private fun performNav(nav: PendingNav) {
+        when (nav) {
+            is PendingNav.OpenFile -> previewFile(nav.path)
+            is PendingNav.SwitchMode -> approvedMode = nav.mode
+            PendingNav.CloseWindow -> {
+                val exit = closeAction
+                closeAction = null
+                exit?.invoke()
+            }
+            PendingNav.RunIngest -> ingestPreview()
+        }
+    }
+
+    private fun reloadDiscarding(proceed: Boolean) {
+        noteClipboard = noteSession.draft
+        noteNotice = "已將捨棄的內容複製到剪貼簿"
+        if (!proceed) {
+            noteSession.pendingNav = null
+            closeAction = null
+        }
+        reloadOpen(proceed)
+    }
+
+    private fun reloadOpen(proceed: Boolean) {
+        val path = noteSession.path ?: return
+        val token = ++loadToken
+        noteSession.generation = token
+        editorEpoch++
+        noteLoading = true
+        autosaveJob?.cancel()
+        val vault = Path.of(settings.vaultPath)
+        val root = wikiRoot?.let(Path::of)
+        publishNote()
+        scope.launch {
+            val loaded = try {
+                withContext(Dispatchers.IO) { loadNote(vault, root, path) }
+            } catch (caught: Exception) {
+                LoadedNote.Unreadable(caught.message ?: "無法讀取")
+            }
+            if (token != loadToken) return@launch
+            noteLoading = false
+            noteSession.open(path, loaded, token, keepPending = proceed)
+            editorEpoch++
+            publishNote()
+            if (proceed) proceedPending()
+        }
+    }
+
+    private fun checkExternal() {
+        val path = noteSession.path ?: return
+        val base = noteSession.base ?: return
+        val token = noteSession.generation
+        val epoch = saveEpoch
+        val baseHash = base.sha256
+        scope.launch {
+            val hash = withContext(Dispatchers.IO) {
+                try {
+                    if (Files.isSymbolicLink(path) || !Files.isRegularFile(path)) return@withContext null
+                    val size = Files.size(path)
+                    val mtime = Files.getLastModifiedTime(path).toMillis()
+                    if (mtime == base.mtimeMillis && size == base.size) return@withContext baseHash
+                    noteFileSha256(path)
+                } catch (_: Exception) {
+                    null
+                }
+            }
+            if (token != loadToken || epoch != saveEpoch) return@launch
+            if (hash == null) {
+                if (noteSession.dirty) {
+                    noteSession.externalChange = true
+                    publishNote()
+                } else {
+                    reloadOpen(proceed = false)
+                }
+                return@launch
+            }
+            when (noteSession.noteExternal(hash, token)) {
+                ExternalEffect.Ignore -> publishNote()
+                ExternalEffect.Banner -> publishNote()
+                ExternalEffect.Reload -> reloadOpen(proceed = false)
+            }
+        }
+    }
+
+    private fun publishNote() {
+        noteMode = noteSession.mode
+        notePhase = noteSession.phase
+        notePending = noteSession.pendingNav
+        noteDirty = noteSession.dirty
+        noteCanEdit = noteSession.permission is EditPermission.Editable
+        noteWarning = (noteSession.permission as? EditPermission.Editable)?.warning
+        noteExternal = noteSession.externalChange
+        noteMixed = noteSession.base?.mixed == true && noteCanEdit
+        noteDraft = noteSession.draft
+        previewBody = noteSession.draft
+        noteUnreadable = !noteLoading && noteSession.path != null && noteSession.base == null &&
+            noteSession.permission is EditPermission.ReadOnly
+        noteStatus = if (noteLoading) {
+            "讀取中…"
+        } else {
+            noteStatusText(
+                permission = noteSession.permission,
+                phase = noteSession.phase,
+                dirty = noteSession.dirty,
+                external = noteSession.externalChange,
+                savedAtMillis = noteSession.savedAtMillis,
+            )
+        }
+        EditorChrome.dirty = noteSession.dirty
+    }
+
+    private fun resetNote() {
+        autosaveJob?.cancel()
+        loadToken++
+        noteSession.generation = loadToken
+        editorEpoch++
+        noteLoading = false
+        noteNotice = ""
+        closeAction = null
+        noteSession.path = null
+        noteSession.draft = ""
+        noteSession.loadedText = ""
+        noteSession.base = null
+        noteSession.permission = EditPermission.ReadOnly("檔案不存在")
+        noteSession.mode = NoteViewMode.Reading
+        noteSession.phase = NotePhase.Clean
+        noteSession.externalChange = false
+        noteSession.pendingNav = null
+        noteSession.savedAtMillis = null
+        previewPath = null
+        previewTitle = ""
+        previewBody = ""
+        publishNote()
+    }
+
+    private fun sameNotePath(left: Path?, right: Path): Boolean {
+        if (left == null) return false
+        return left.toAbsolutePath().normalize() == right.toAbsolutePath().normalize()
     }
 }

@@ -10,13 +10,12 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.rememberScrollbarAdapter
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
-import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
@@ -46,7 +45,6 @@ import com.neojou.mystudy.wiki.index.NoteSummary
 import com.neojou.mystudy.wiki.research.formatSearxngStatus
 import com.neojou.mystudy.wiki.settings.INGEST_MODE_HELP
 import com.neojou.mystudy.wiki.settings.IngestMode
-import com.neojou.mystudy.wiki.settings.ingestIdleHint
 import com.neojou.mystudy.wiki.settings.ingestModeLabel
 import java.nio.file.Path
 import kotlin.io.path.isDirectory
@@ -78,50 +76,7 @@ fun HomePane(controller: StudyController, modifier: Modifier = Modifier) {
         }
         return
     }
-    Column(modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Button(
-                onClick = controller::ingestPreview,
-                enabled = !controller.busy && controller.canIngestPreview(),
-            ) { Text("Ingest") }
-            Text(
-                text = controller.previewTitle,
-                style = MaterialTheme.typography.titleMedium,
-                maxLines = 1,
-                modifier = Modifier.weight(1f),
-            )
-        }
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            if (controller.busy) {
-                CircularProgressIndicator(Modifier.size(16.dp))
-            }
-            Text(
-                text = controller.ingestMessage.ifBlank {
-                    if (controller.canIngestPreview()) {
-                        ingestIdleHint(controller.settings.ingestMode)
-                    } else {
-                        "This file cannot be ingested."
-                    }
-                },
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.weight(1f),
-            )
-        }
-        Text(
-            controller.previewBody,
-            style = MaterialTheme.typography.bodyMedium,
-            modifier = Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()),
-        )
-    }
+    NotePreview(controller, modifier)
 }
 
 @Composable
@@ -269,6 +224,7 @@ fun SettingsPane(controller: StudyController, modifier: Modifier = Modifier) {
     var ctx by remember { mutableStateOf(current.ollamaNumCtx.toString()) }
     var searxng by remember { mutableStateOf(current.searxngUrl) }
     var ingestMode by remember { mutableStateOf(current.ingestMode) }
+    var noteAutosave by remember { mutableStateOf(current.noteAutosave) }
     var localError by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(current) {
         vault = current.vaultPath
@@ -277,6 +233,7 @@ fun SettingsPane(controller: StudyController, modifier: Modifier = Modifier) {
         ctx = current.ollamaNumCtx.toString()
         searxng = current.searxngUrl
         ingestMode = current.ingestMode
+        noteAutosave = current.noteAutosave
     }
     Column(
         modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
@@ -319,6 +276,13 @@ fun SettingsPane(controller: StudyController, modifier: Modifier = Modifier) {
             }
         }
         Text(INGEST_MODE_HELP, style = MaterialTheme.typography.bodySmall)
+        Row(
+            modifier = Modifier.fillMaxWidth().clickable { noteAutosave = !noteAutosave },
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Checkbox(checked = noteAutosave, onCheckedChange = { noteAutosave = it })
+            Text("停止編輯 2 秒後自動存檔")
+        }
         localError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = {
@@ -336,6 +300,7 @@ fun SettingsPane(controller: StudyController, modifier: Modifier = Modifier) {
                         ollamaNumCtx = parsed,
                         searxngUrl = searxng,
                         ingestMode = ingestMode,
+                        noteAutosave = noteAutosave,
                     ),
                 )
             }) { Text("Save") }

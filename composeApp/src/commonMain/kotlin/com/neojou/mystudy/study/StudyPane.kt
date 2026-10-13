@@ -9,7 +9,9 @@ import androidx.compose.ui.Modifier
 @Composable
 expect fun StudyPane(
     mode: StudyMode,
+    requestedMode: StudyMode?,
     fileBrowserOpen: Boolean,
     onMode: (StudyMode) -> Unit,
+    onRequestHandled: () -> Unit,
     modifier: Modifier,
 )
