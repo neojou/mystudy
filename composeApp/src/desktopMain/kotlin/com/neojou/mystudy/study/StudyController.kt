@@ -38,12 +38,15 @@ import com.neojou.mystudy.wiki.research.SearxngStatus
 import com.neojou.mystudy.wiki.research.parseReviewFile
 import com.neojou.mystudy.wiki.research.researchBlockReason
 import com.neojou.mystudy.wiki.settings.AppSettings
+import com.neojou.mystudy.wiki.settings.IngestMode
 import com.neojou.mystudy.wiki.settings.SettingsStore
 import com.neojou.mystudy.wiki.settings.StudySettings
+import com.neojou.mystudy.wiki.settings.ingestLinkMessage
 import com.neojou.mystudy.wiki.vault.Discovery
 import com.neojou.mystudy.wiki.vault.applyProposal
 import com.neojou.mystudy.wiki.vault.discoverWikiRoot
 import com.neojou.mystudy.wiki.vault.ingestTargets
+import com.neojou.mystudy.wiki.vault.linkIntoRawSource
 import com.neojou.mystudy.wiki.vault.readCapped
 import com.neojou.mystudy.wiki.vault.readTextIfExists
 import com.neojou.mystudy.wiki.vault.scaffoldWiki
@@ -441,6 +444,27 @@ class StudyController(
         val source = targets.first()
         val generation = ++ingestGeneration
         val vault = Path.of(settings.vaultPath)
+        if (settings.ingestMode == IngestMode.Link) {
+            proposal = null
+            ingestMessage = "Linking…"
+            ingestJob = scope.launch {
+                busy = true
+                try {
+                    val staged = withContext(Dispatchers.IO) {
+                        linkIntoRawSource(Path.of(root), source)
+                    }
+                    if (generation != ingestGeneration) return@launch
+                    ingestMessage = ingestLinkMessage(staged.relativePath, staged.created)
+                } catch (cancel: CancellationException) {
+                    throw cancel
+                } catch (caught: Exception) {
+                    if (generation == ingestGeneration) ingestMessage = caught.message ?: "Ingest failed."
+                } finally {
+                    if (generation == ingestGeneration) busy = false
+                }
+            }
+            return
+        }
         ingestJob = scope.launch {
             busy = true
             ingestMessage = "Analyzing…"

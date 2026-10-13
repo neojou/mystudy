@@ -1,6 +1,8 @@
 # 程式如何做 Wiki Ingest
 
-預覽區的 Ingest 讀目前這則 vault 筆記，打兩次本機模型，組出可確認的 wiki 頁與 REVIEW。確認前不寫磁碟，也不在 `raw/sources/` 建 symlink。確認後才寫 wiki 頁、更新 `wiki/index.md`、append `wiki/log.md`，並把勾選的 REVIEW append 到 `wiki/review.md`。
+預覽區的 Ingest 預設讀目前這則 vault 筆記，打兩次本機模型，組出可確認的 wiki 頁與 REVIEW。確認前不寫磁碟，也不在 `raw/sources/` 建 symlink。確認後才寫 wiki 頁、更新 `wiki/index.md`、append `wiki/log.md`，並把勾選的 REVIEW append 到 `wiki/review.md`。
+
+Settings 的 Ingest 可以改成 Symbolic link only。那個選項只呼叫 `linkIntoRawSource`，在 `{wikiRoot}/raw/sources/` 建相對 symlink，然後停。不打模型，不開確認對話框。按 Save 之後的下一次 Ingest 才改走新選項。沒存過、空白或不認得的值都是分析與產生。
 
 輸出語言是繁體中文（台灣）。來源可以是英文、日文、簡體中文或其他語言。程式只把語言名填進 prompt，不做 OpenCC，也不濾簡體字。
 
@@ -14,18 +16,18 @@ Vault 是 Obsidian 庫根（例：`第二大腦`）。Wiki root 是同時有 `ra
 
 `previewOffersIngest` 只對 vault 內、單一 `.md`、且不在 `{wikiRoot}/wiki/` 與 `{wikiRoot}/raw/` 的檔為真。資料夾、symlink、wiki 頁、raw 都不提供這個按鈕。vault 本身是 wiki root 時，`Zettelkasten/Inbox/卡片盒筆記法.md` 仍可 ingest。
 
-`linkIntoRawSource` 仍可建相對 symlink，測試也還鎖這件事。預覽按鈕不呼叫它。
+`linkIntoRawSource` 仍可建相對 symlink，測試也還鎖這件事。預設的預覽按鈕不呼叫它。Symbolic link only 才呼叫它：同一檔已有 link 就重用，檔名撞了才用 ` (2)`，原文不複製、不移動、不覆寫。
 
 ## 呼叫鏈
 
 Wiki 選單沒有 Ingest。Browse、Chat、Ask (keyword) 在 Wiki 選單。
 
 1. 左側點一則檔案：`FileTreePane` → `StudyController.previewFile`。換檔會取消進行中的 ingest。
-2. 右側 Ingest 按鈕在 `previewOffersIngest` 為真時可按。提示是 `Ingest reads this note, then asks before writing wiki pages.`
-3. 按 Ingest：`ingestPreview` 只處理目前這一檔。沒有 wiki root 時開 Create wiki，訊息是 `Create a wiki root before ingest.`
-4. 讀檔與兩次模型呼叫在 `Dispatchers.IO`。索引的 `resolve`、`findSourceForRaw`、`noteExists` 用 `runBlocking(wiki-index)`，而且只從 IO 執行緒呼叫。模型呼叫不佔 `wiki-index`。
+2. 右側 Ingest 按鈕在 `previewOffersIngest` 為真時可按。分析與產生的提示是 `Ingest reads this note, then asks before writing wiki pages.` Symbolic link only 的提示是 `Ingest creates a symbolic link under raw/sources/.`
+3. 按 Ingest：`ingestPreview` 只處理目前這一檔。沒有 wiki root 時開 Create wiki，訊息是 `Create a wiki root before ingest.` Symbolic link only 在 IO 上建 link 就結束。進行中是 `Linking…`。新建是 `Linked raw/sources/….`，重用是 `Already linked at raw/sources/….`。失敗用 `linkIntoRawSource` 的句子。分析與產生才繼續下面的模型呼叫。
+4. 分析與產生時，讀檔與兩次模型呼叫在 `Dispatchers.IO`。索引的 `resolve`、`findSourceForRaw`、`noteExists` 用 `runBlocking(wiki-index)`，而且只從 IO 執行緒呼叫。模型呼叫不佔 `wiki-index`。
 5. 結果留在記憶體的 `DraftProposal`。`ConfirmWriteDialog` 出現後，使用者按 Write 才 `applyProposal`。Cancel 不寫。
-6. 忙碌時動作列先 `Analyzing…`，再 `Generating…`。提案出來後是 `Confirm the pages before anything is written.`
+6. 分析與產生忙碌時，動作列先 `Analyzing…`，再 `Generating…`。提案出來後是 `Confirm the pages before anything is written.`
 
 讀取的上下文：
 
@@ -45,6 +47,7 @@ Wiki 選單沒有 Ingest。Browse、Chat、Ask (keyword) 在 Wiki 選單。
 | --- | --- |
 | 預覽按鈕 | `StudyScreens.kt` 的 `HomePane` |
 | 狀態與兩次呼叫 | `StudyController.kt` 的 `ingestPreview`、`runIngest`、`confirmWrites` |
+| Ingest 模式 | `wiki/settings/IngestMode.kt`、`AppSettings` 的 `ingestMode` |
 | Analyze / Generate | `wiki/ingest/IngestPipeline.kt` |
 | FILE / REVIEW 解析、路徑守衛 | `wiki/ingest/IngestBlocks.kt` |
 | 語言常數 | `IngestLanguage.NAME` |
@@ -194,7 +197,7 @@ Generate 的 system 佔位是 `{{languageRule}}`、`{{schema}}`、`{{sourceStem}
 
 ## 與設計參考的差異
 
-`docs/programming/ingest_design_ref.md` 第 1 步仍寫先建 symlink。實作不採用那一步。來源就是目前預覽的筆記。`sources` 是 vault 相對路徑，不是 `sources/{stem}.md`。舊頁若仍寫 `sources/x.md`，`findSourceForRaw` 對不上，可能另開 ` (2)`。
+`docs/programming/ingest_design_ref.md` 第 1 步仍寫先建 symlink 再分析。預設實作不採用那一步。來源就是目前預覽的筆記。`sources` 是 vault 相對路徑，不是 `sources/{stem}.md`。舊頁若仍寫 `sources/x.md`，`findSourceForRaw` 對不上，可能另開 ` (2)`。Settings 的 Symbolic link only 只建 link，建完就停，不接分析。
 
 Scaffold 的 `wiki/schema.md` 種子仍描述 raw/sources symlink。Ingest 不改這個檔。
 
@@ -210,6 +213,7 @@ Scaffold 的 `wiki/schema.md` 種子仍描述 raw/sources symlink。Ingest 不�
 - 只寫 REVIEW 時有 review 與 log，沒有概念頁；既有 `# Review` 開頭還在；沒呼叫 apply 就沒有 review.md
 - 送出的 system 含 `Traditional Chinese (Taiwan, 繁體中文)`，不含前言
 - 沒有合法 FILE 時仍有一頁可勾選的後援 source，確認前不寫
+- Ingest 模式：缺鍵與壞值是 `analyze`；存 `link` 再讀仍是 `link`。兩句預覽提示，以及新建／重用的 link 訊息
 - `wiki/review.md` 不進 Ask 檢索、`wiki.read_page` 拒絕它、Ask/Chat 存檔不新建 review 條目
 
 `WikiBehaviorTest.kt` 仍鎖 symlink、`previewOffersIngest`、寫入守衛（`wiki/review.md` 允許，schema 與 raw 拒絕）與 Lexical Ask。`ChatAgentBehaviorTest.readPageRejectsUnsafePaths` 含 `wiki/review.md`。

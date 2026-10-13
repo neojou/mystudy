@@ -10,6 +10,7 @@ data class StudySettings(
     val ollamaModel: String,
     val ollamaNumCtx: Int,
     val searxngUrl: String,
+    val ingestMode: IngestMode = IngestMode.Analyze,
 )
 
 interface SettingsStore {
@@ -55,6 +56,7 @@ class AppSettings(private val store: SettingsStore) {
         ollamaNumCtx = store.get(KEY_OLLAMA_NUM_CTX, DEFAULT_NUM_CTX.toString()).toIntOrNull()
             ?: DEFAULT_NUM_CTX,
         searxngUrl = store.get(KEY_SEARXNG_URL, DEFAULT_SEARXNG_URL).ifBlank { DEFAULT_SEARXNG_URL },
+        ingestMode = ingestModeFromStored(store.get(KEY_INGEST_MODE, "analyze")),
     )
 
     /** Stores [settings]. A blank SearXNG URL becomes the default. A non-loopback URL is rejected. */
@@ -66,6 +68,7 @@ class AppSettings(private val store: SettingsStore) {
         store.put(KEY_OLLAMA_MODEL, settings.ollamaModel.trim())
         store.put(KEY_OLLAMA_NUM_CTX, settings.ollamaNumCtx.toString())
         store.put(KEY_SEARXNG_URL, searxngUrl)
+        store.put(KEY_INGEST_MODE, settings.ingestMode.storedValue())
         return settings.copy(searxngUrl = searxngUrl)
     }
 
@@ -111,5 +114,6 @@ class AppSettings(private val store: SettingsStore) {
         private const val KEY_OLLAMA_MODEL = "ollamaModel"
         private const val KEY_OLLAMA_NUM_CTX = "ollamaNumCtx"
         private const val KEY_SEARXNG_URL = "searxngUrl"
+        private const val KEY_INGEST_MODE = "ingestMode"
     }
 }

@@ -19,6 +19,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -35,14 +36,18 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.rememberWindowState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import com.neojou.mystudy.AppTheme
+import com.neojou.mystudy.AppWindow
 import com.neojou.mystudy.AppVersion
 import com.neojou.mystudy.wiki.index.NoteSummary
 import com.neojou.mystudy.wiki.research.formatSearxngStatus
+import com.neojou.mystudy.wiki.settings.INGEST_MODE_HELP
+import com.neojou.mystudy.wiki.settings.IngestMode
+import com.neojou.mystudy.wiki.settings.ingestIdleHint
+import com.neojou.mystudy.wiki.settings.ingestModeLabel
 import java.nio.file.Path
 import kotlin.io.path.isDirectory
 
@@ -101,7 +106,7 @@ fun HomePane(controller: StudyController, modifier: Modifier = Modifier) {
             Text(
                 text = controller.ingestMessage.ifBlank {
                     if (controller.canIngestPreview()) {
-                        "Ingest reads this note, then asks before writing wiki pages."
+                        ingestIdleHint(controller.settings.ingestMode)
                     } else {
                         "This file cannot be ingested."
                     }
@@ -212,10 +217,11 @@ fun AskPane(controller: StudyController, modifier: Modifier = Modifier) {
         }
     }
     if (controller.askGraphOpen && controller.askPages.isNotEmpty()) {
-        Window(
+        AppWindow(
             onCloseRequest = controller::closeAskGraph,
             title = "Knowledge graph",
             state = rememberWindowState(size = DpSize(720.dp, 560.dp)),
+            kind = "Ask",
         ) {
             AppTheme {
                 Surface(Modifier.fillMaxSize()) {
@@ -231,10 +237,11 @@ fun AskPane(controller: StudyController, modifier: Modifier = Modifier) {
     }
     val readerPath = controller.askReaderPath
     if (readerPath != null) {
-        Window(
+        AppWindow(
             onCloseRequest = controller::closeAskReader,
             title = controller.askReaderTitle.ifBlank { readerPath },
             state = rememberWindowState(size = DpSize(720.dp, 640.dp)),
+            kind = "Ask",
         ) {
             AppTheme {
                 Surface(Modifier.fillMaxSize()) {
@@ -261,6 +268,7 @@ fun SettingsPane(controller: StudyController, modifier: Modifier = Modifier) {
     var model by remember { mutableStateOf(current.ollamaModel) }
     var ctx by remember { mutableStateOf(current.ollamaNumCtx.toString()) }
     var searxng by remember { mutableStateOf(current.searxngUrl) }
+    var ingestMode by remember { mutableStateOf(current.ingestMode) }
     var localError by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(current) {
         vault = current.vaultPath
@@ -268,6 +276,7 @@ fun SettingsPane(controller: StudyController, modifier: Modifier = Modifier) {
         model = current.ollamaModel
         ctx = current.ollamaNumCtx.toString()
         searxng = current.searxngUrl
+        ingestMode = current.ingestMode
     }
     Column(
         modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
@@ -296,6 +305,20 @@ fun SettingsPane(controller: StudyController, modifier: Modifier = Modifier) {
             "num_ctx 65536 reserves a large context on a 24GB Mac. A failed load is shown. The app does not lower it.",
             style = MaterialTheme.typography.bodySmall,
         )
+        Text("Ingest", style = MaterialTheme.typography.titleSmall)
+        IngestMode.entries.forEach { mode ->
+            Row(
+                modifier = Modifier.fillMaxWidth().clickable { ingestMode = mode },
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                RadioButton(
+                    selected = ingestMode == mode,
+                    onClick = { ingestMode = mode },
+                )
+                Text(ingestModeLabel(mode))
+            }
+        }
+        Text(INGEST_MODE_HELP, style = MaterialTheme.typography.bodySmall)
         localError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = {
@@ -312,6 +335,7 @@ fun SettingsPane(controller: StudyController, modifier: Modifier = Modifier) {
                         ollamaModel = model.trim(),
                         ollamaNumCtx = parsed,
                         searxngUrl = searxng,
+                        ingestMode = ingestMode,
                     ),
                 )
             }) { Text("Save") }

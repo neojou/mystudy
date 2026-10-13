@@ -2,7 +2,7 @@
 
 mystudy 是桌面 Compose 應用。它對本機 Obsidian vault 做 llm-wiki 式筆記，回答與起草都走本機 Ollama。
 
-對齊的是 [llm-wiki](https://github.com/nashsu/llm_wiki) 的目錄與兩段式匯入。預覽 Ingest 走 Analysis 再 Generation，模型輸出 FILE / REVIEW 區塊，本地解析後才寫。深度研究讀 `wiki/review.md`，只把查詢字串送到 loopback SearXNG，再串流綜整成 `wiki/queries/` 的一頁。沒有移植 embedding、多模態、持久佇列或分塊。預覽 Ingest 不建 `raw/sources` symlink。
+對齊的是 [llm-wiki](https://github.com/nashsu/llm_wiki) 的目錄與兩段式匯入。預覽 Ingest 走 Analysis 再 Generation，模型輸出 FILE / REVIEW 區塊，本地解析後才寫。深度研究讀 `wiki/review.md`，只把查詢字串送到 loopback SearXNG，再串流綜整成 `wiki/queries/` 的一頁。沒有移植 embedding、多模態、持久佇列或分塊。預覽 Ingest 預設不建 `raw/sources` symlink。Settings 可以改成只建那條相對 link，建完就停。
 
 ## 目標平台
 
@@ -27,6 +27,8 @@ mystudy 是桌面 Compose 應用。它對本機 Obsidian vault 做 llm-wiki 式�
 `StudyMode` 有 Home、Browse、Chat、Ask、DeepResearch、Settings。Wiki 選單順序是 Browse、Chat、Ask (keyword)。「深度研究」是 Wiki 與 Settings 之間的頂層項目。Settings 是上方獨立項目。預覽區的 Ingest 按鈕留在 Home，不在 Wiki 選單裡。沒有 Ingest 模式，也沒有 `IngestPane`。
 
 `HomeScreen` 左上角打開檔案樹，預設是開的。樹沒有右鍵選單：Compose 的 `ContextMenuArea` 會和列上的點擊搶同一下 pointer down。動作放在預覽區按鈕。樹根標籤用 vault 路徑的最後一段；Settings 顯示完整路徑。
+
+系統選單列在應用程式名稱右邊有 Windows。它列出目前開著的 Compose `Window`：主視窗、Ask 與 Chat 的知識圖、頁面視窗。About、寫入確認這類對話框不在清單裡。點一項會還原該視窗並把它帶到前面。每一扇視窗都掛這個選單，焦點在子視窗時它還在。
 
 `StudyController` 持有 vault、索引、Ollama 與各畫面的狀態。SQLite 只用名為 `wiki-index` 的那條 dispatcher。Chat 的工具呼叫在這條 dispatcher；模型呼叫在 IO，不佔住它。Chat 的問題、答案與最近 3 輪歷史只在記憶體，不寫 vault、不寫 Preferences。
 
@@ -53,19 +55,19 @@ Wiki root 是同時有 `raw/` 目錄與 `wiki/index.md` 的目錄。它可以是
 
 Vault 裡與 `wiki/`、`raw/` 並列的筆記，例如 `Zettelkasten/`，不是 wiki 頁。`isWikiManagedPath` 只含 `{wikiRoot}/wiki/` 與 `{wikiRoot}/raw/`。判斷用 lexical 路徑，所以 `raw/sources/` 裡指向庫外原文的 symlink 仍算受管。
 
-Wiki 頁在 `{wikiRoot}/wiki/`（sources、concepts、entities、queries、index.md、log.md、schema.md、review.md）。`raw/sources/` 仍是 scaffold 留下的目錄。預覽 Ingest 不在那裡建 link。
+Wiki 頁在 `{wikiRoot}/wiki/`（sources、concepts、entities、queries、index.md、log.md、schema.md、review.md）。`raw/sources/` 仍是 scaffold 留下的目錄。預覽 Ingest 預設不在那裡建 link。Settings 選 Symbolic link only 時，按鈕只在那裡建相對 symlink。
 
 ## 寫入邊界
 
 `assertWikiWrite` 只允許寫 wiki 頁（含 `wiki/queries/`）、`wiki/index.md`、`wiki/log.md` 與 `wiki/review.md`。`wiki/schema.md` 不能從這條路改。`raw/` 不能覆寫。深度研究的新頁走同一條允許清單，不另外加目錄。
 
-`assertNewRawFile` 仍只允許新建 `raw/sources/` 底下的單一檔名，目的地已存在就拒絕。`linkIntoRawSource` 還在，預覽 Ingest 不呼叫它。確認前這條流程不寫磁碟。
+`assertNewRawFile` 仍只允許新建 `raw/sources/` 底下的單一檔名，目的地已存在就拒絕。`linkIntoRawSource` 還在。預設的預覽 Ingest 不呼叫它，確認前不寫磁碟。Settings 選 Symbolic link only 時，按鈕只呼叫它，立刻寫那條 link，不打模型。
 
 ## 索引、偏好、Ollama
 
 Ask 用的 SQLite 在 `~/Library/Application Support/mystudy/index/{sha256}.sqlite`。雜湊的是 wiki root canonical 路徑。這個路徑寫死在 macOS 的 Application Support，檔案不進 vault。
 
-偏好在 Java Preferences 節點 `com/neojou/mystudy/wiki`，同樣不進 vault。內容是 vault 路徑、wiki root、Ollama URL、模型、`num_ctx`、SearXNG URL。預設 URL 是 `http://127.0.0.1:11434/v1`，模型 `gemma4-64k`，`num_ctx` 是 65536，SearXNG 是 `http://127.0.0.1:8080`。Chat 歷史不在這裡。SearXNG 連線狀態也不在這裡。
+偏好在 Java Preferences 節點 `com/neojou/mystudy/wiki`，同樣不進 vault。內容是 vault 路徑、wiki root、Ollama URL、模型、`num_ctx`、SearXNG URL、Ingest 模式。預設 URL 是 `http://127.0.0.1:11434/v1`，模型 `gemma4-64k`，`num_ctx` 是 65536，SearXNG 是 `http://127.0.0.1:8080`。Ingest 模式預設是 `analyze`（分析與產生，不建 link）；`link` 是只建 `raw/sources/` 的相對 symlink。缺鍵或不認得的值都當成 `analyze`。Chat 歷史不在這裡。SearXNG 連線狀態也不在這裡。
 
 Ollama 主機必須是 `127.0.0.1` 或 `localhost`。客戶端拿掉 URL 的 `/v1`，改打 native `/api/chat`，這樣才能設 `num_ctx`。`/v1/chat/completions` 設不了 context 長度。深度研究的綜整用同一條 loopback，但是 `stream: true`。`complete()` 仍是 `stream: false`。
 

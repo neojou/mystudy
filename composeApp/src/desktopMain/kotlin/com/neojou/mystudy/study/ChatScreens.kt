@@ -21,9 +21,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.rememberWindowState
 import com.neojou.mystudy.AppTheme
+import com.neojou.mystudy.AppWindow
 
 @Composable
 fun ChatPane(controller: StudyController, modifier: Modifier = Modifier) {
@@ -78,10 +78,11 @@ fun ChatPane(controller: StudyController, modifier: Modifier = Modifier) {
         }
     }
     if (controller.chatGraphOpen && controller.chatPages.isNotEmpty()) {
-        Window(
+        AppWindow(
             onCloseRequest = controller::closeChatGraph,
             title = "Knowledge graph",
             state = rememberWindowState(size = DpSize(720.dp, 560.dp)),
+            kind = "Chat",
         ) {
             AppTheme {
                 Surface(Modifier.fillMaxSize()) {
@@ -97,10 +98,11 @@ fun ChatPane(controller: StudyController, modifier: Modifier = Modifier) {
     }
     val readerPath = controller.chatReaderPath
     if (readerPath != null) {
-        Window(
+        AppWindow(
             onCloseRequest = controller::closeChatReader,
             title = controller.chatReaderTitle.ifBlank { readerPath },
             state = rememberWindowState(size = DpSize(720.dp, 640.dp)),
+            kind = "Chat",
         ) {
             AppTheme {
                 Surface(Modifier.fillMaxSize()) {

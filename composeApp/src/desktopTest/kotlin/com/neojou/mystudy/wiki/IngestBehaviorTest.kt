@@ -18,6 +18,12 @@ import com.neojou.mystudy.wiki.model.defaultChecked
 import com.neojou.mystudy.wiki.model.defaultCheckedReviews
 import com.neojou.mystudy.wiki.ollama.ChatClient
 import com.neojou.mystudy.wiki.ollama.ChatRequest
+import com.neojou.mystudy.wiki.settings.AppSettings
+import com.neojou.mystudy.wiki.settings.IngestMode
+import com.neojou.mystudy.wiki.settings.MemorySettingsStore
+import com.neojou.mystudy.wiki.settings.ingestIdleHint
+import com.neojou.mystudy.wiki.settings.ingestLinkMessage
+import com.neojou.mystudy.wiki.settings.ingestModeFromStored
 import com.neojou.mystudy.wiki.vault.applyProposal
 import com.neojou.mystudy.wiki.vault.scaffoldWiki
 import java.nio.file.Files
@@ -35,6 +41,39 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class IngestBehaviorTest {
+    @Test
+    fun ingestModeDefaultsToAnalyzeAndRoundTripsLink() {
+        val missing = AppSettings(MemorySettingsStore())
+        assertEquals(IngestMode.Analyze, missing.load().ingestMode)
+        assertEquals(IngestMode.Analyze, ingestModeFromStored(" "))
+        assertEquals(IngestMode.Analyze, ingestModeFromStored("nope"))
+        assertEquals(IngestMode.Link, ingestModeFromStored("LINK"))
+
+        val store = MemorySettingsStore(mapOf("ingestMode" to "nope"))
+        val app = AppSettings(store)
+        assertEquals(IngestMode.Analyze, app.load().ingestMode)
+        app.save(app.load().copy(ingestMode = IngestMode.Link))
+        assertEquals("link", store.get("ingestMode", ""))
+        assertEquals(IngestMode.Link, app.load().ingestMode)
+    }
+
+    @Test
+    fun ingestHintsFollowTheSavedMode() {
+        assertEquals(
+            "Ingest reads this note, then asks before writing wiki pages.",
+            ingestIdleHint(IngestMode.Analyze),
+        )
+        assertEquals(
+            "Ingest creates a symbolic link under raw/sources/.",
+            ingestIdleHint(IngestMode.Link),
+        )
+        assertEquals("Linked raw/sources/note.md.", ingestLinkMessage("raw/sources/note.md", created = true))
+        assertEquals(
+            "Already linked at raw/sources/note.md.",
+            ingestLinkMessage("raw/sources/note.md", created = false),
+        )
+    }
+
     @Test
     fun parserKeepsClosedBlocksAndDropsUnsafeOnes() {
         val parsed = parseIngestBlocks(

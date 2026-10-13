@@ -4,7 +4,7 @@
 > 背景：`docs/programming/llm_wiki_ingest_gap.md`（可選）。對象 `neojou/mystudy` `main` @ `ce66958`。
 > 本文件是**設計目標**；實作後以測試與 `How-To-do-Ingest.md` 為準。
 >
-> 實作差異：預覽 Ingest 不先建 symlink。來源就是目前預覽的 vault 筆記，frontmatter `sources` 用 vault 相對路徑。確認前不寫磁碟。`linkIntoRawSource` 仍在，按鈕不呼叫它。以 `How-To-do-Ingest.md` 與 `IngestBehaviorTest` 為準。
+> 實作差異：預覽 Ingest 預設不先建 symlink。來源就是目前預覽的 vault 筆記，frontmatter `sources` 用 vault 相對路徑。確認前不寫磁碟。Settings 可改成 Symbolic link only：按鈕只呼叫 `linkIntoRawSource`，建完就停，不打模型。以 `How-To-do-Ingest.md` 與 `IngestBehaviorTest` 為準。
 
 ## 0. 一句話
 

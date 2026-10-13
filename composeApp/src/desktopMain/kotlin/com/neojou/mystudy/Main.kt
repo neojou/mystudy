@@ -4,7 +4,6 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
 import java.awt.Desktop
@@ -16,7 +15,8 @@ import java.awt.EventQueue
  * Creates a Compose for Desktop [Window] within [application]
  * and hosts the shared [App] composable.
  * On macOS the system application menu uses [AppVersion.APP_NAME], and its About
- * item opens the same dialog as the in-app About item.
+ * item opens the same dialog as the in-app About item. The Windows menu lists the
+ * open windows and brings the chosen one forward.
  */
 fun main() {
     // Read by AWT when it creates the macOS application menu. Set this before any window.
@@ -32,7 +32,7 @@ fun main() {
         val windowState = rememberWindowState(
             size = DpSize(960.dp, 640.dp),
         )
-        Window(
+        AppWindow(
             onCloseRequest = ::exitApplication,
             title = AppVersion.APP_NAME,
             state = windowState,
