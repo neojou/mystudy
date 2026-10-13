@@ -1,6 +1,9 @@
 package com.neojou.mystudy.wiki.settings
 
+import com.neojou.mystudy.wiki.vault.canonical
 import java.net.URI
+import java.nio.file.Path
+import java.security.MessageDigest
 import java.util.prefs.Preferences
 
 data class StudySettings(
@@ -11,6 +14,7 @@ data class StudySettings(
     val ollamaNumCtx: Int,
     val searxngUrl: String,
     val ingestMode: IngestMode = IngestMode.Analyze,
+    val lintSemantic: Boolean = false,
 )
 
 interface SettingsStore {
@@ -57,7 +61,15 @@ class AppSettings(private val store: SettingsStore) {
             ?: DEFAULT_NUM_CTX,
         searxngUrl = store.get(KEY_SEARXNG_URL, DEFAULT_SEARXNG_URL).ifBlank { DEFAULT_SEARXNG_URL },
         ingestMode = ingestModeFromStored(store.get(KEY_INGEST_MODE, "analyze")),
+        lintSemantic = store.get(KEY_LINT_SEMANTIC, "false") == "true",
     )
+
+    /** Ignore paths for one wiki root. Not written by [save]. */
+    fun lintIgnore(rootPath: String): String = store.get(lintIgnoreKey(rootPath), "")
+
+    fun saveLintIgnore(rootPath: String, text: String) {
+        store.put(lintIgnoreKey(rootPath), text)
+    }
 
     /** Stores [settings]. A blank SearXNG URL becomes the default. A non-loopback URL is rejected. */
     fun save(settings: StudySettings): StudySettings {
@@ -69,6 +81,7 @@ class AppSettings(private val store: SettingsStore) {
         store.put(KEY_OLLAMA_NUM_CTX, settings.ollamaNumCtx.toString())
         store.put(KEY_SEARXNG_URL, searxngUrl)
         store.put(KEY_INGEST_MODE, settings.ingestMode.storedValue())
+        store.put(KEY_LINT_SEMANTIC, if (settings.lintSemantic) "true" else "false")
         return settings.copy(searxngUrl = searxngUrl)
     }
 
@@ -115,5 +128,13 @@ class AppSettings(private val store: SettingsStore) {
         private const val KEY_OLLAMA_NUM_CTX = "ollamaNumCtx"
         private const val KEY_SEARXNG_URL = "searxngUrl"
         private const val KEY_INGEST_MODE = "ingestMode"
+        private const val KEY_LINT_SEMANTIC = "lintSemantic"
+
+        private fun lintIgnoreKey(rootPath: String): String {
+            val canonicalPath = canonical(Path.of(rootPath)).toString()
+            val digest = MessageDigest.getInstance("SHA-256").digest(canonicalPath.toByteArray(Charsets.UTF_8))
+            val hex = digest.joinToString("") { "%02x".format(it) }
+            return "lintIgnore.$hex"
+        }
     }
 }

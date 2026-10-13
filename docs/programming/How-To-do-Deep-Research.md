@@ -2,7 +2,7 @@
 
 上方選單「深度研究」讀 `wiki/review.md`，對一筆 review 做 SearXNG 搜尋，再請本機 Ollama 綜整，寫入 `wiki/queries/research-*.md`。成功後才從 `wiki/review.md` 刪掉那一段。
 
-Ingest 仍只負責把勾選的 REVIEW append 進 `wiki/review.md`。它不做搜尋，也不打這支 prompt。
+Ingest 與 Wiki Lint 都只負責把勾選的項目 append 進 `wiki/review.md`。它們不做搜尋，也不打這支 prompt。Lint 的來源行是 `- source: lint`。深度研究不看 source。有 SEARCH 就用 SEARCH。成功後仍只刪掉這一筆。
 
 輸出語言是繁體中文（台灣），跟 Ingest 同一個常數 `IngestLanguage.NAME`。不是偏好，不做 OpenCC。四種類型共用 `ai-prompts/deep-research.md`。
 
@@ -12,7 +12,7 @@ Ingest 仍只負責把勾選的 REVIEW append 進 `wiki/review.md`。它不做�
 
 `StudyMode.DeepResearch`。選單在 Wiki 與 Settings 之間，標籤是「深度研究」。其餘畫面維持英文。
 
-左欄列出每一筆 review（contradiction、duplicate、missing-page、suggestion），每筆一個「深度研究」按鈕。右欄顯示階段、搜尋命中、串流綜整。`review.md` 沒有項目時顯示「目前沒有待研究項目（Ingest 時勾選 REVIEW 會加入）」。
+左欄列出每一筆 review（contradiction、duplicate、missing-page、suggestion），每筆一個「深度研究」按鈕。右欄顯示階段、搜尋命中、串流綜整。`review.md` 沒有項目時顯示「目前沒有待研究項目（Ingest 或 Lint 加入）」。
 
 按鈕要同時成立才可按：SearXNG 連線狀態是 Ok、沒有另一筆在跑、wiki root 已開、Ollama 模型名稱不是空的。Unknown、Testing、Failed 都會停用，並在卡片下顯示原因。
 

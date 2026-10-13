@@ -64,6 +64,7 @@ fun HomeScreen(about: AboutRequest) {
                 MyTopMenuItem(id = "browse", label = "Browse", onClick = { mode = StudyMode.Browse }),
                 MyTopMenuItem(id = "chat", label = "Chat", onClick = { mode = StudyMode.Chat }),
                 MyTopMenuItem(id = "ask", label = "Ask (keyword)", onClick = { mode = StudyMode.Ask }),
+                MyTopMenuItem(id = "lint", label = "Lint（自動健檢 wiki）", onClick = { mode = StudyMode.Lint }),
             ),
         ),
         MyTopMenuItem(

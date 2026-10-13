@@ -8,6 +8,7 @@ enum class StudyMode {
     Browse,
     Chat,
     Ask,
+    Lint,
     DeepResearch,
     Settings,
 }

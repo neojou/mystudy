@@ -12,7 +12,7 @@
 ./gradlew :composeApp:run
 ```
 
-`run` 的工作目錄是專案根。Ask、Chat、Ingest、深度研究會從這個目錄往上找到 `ai-prompts/`。用詞在 `ask.md`、`chat-agent.md`、`ingest-analyze.md`、`ingest-generate.md`、`deep-research.md`，每次呼叫現讀，所以改 prompt 檔後，下一次呼叫就用新內容，不用重新編譯。
+`run` 的工作目錄是專案根。Ask、Chat、Ingest、深度研究、Wiki Lint 會從這個目錄往上找到 `ai-prompts/`。用詞在 `ask.md`、`chat-agent.md`、`ingest-analyze.md`、`ingest-generate.md`、`deep-research.md`、`wiki-lint-semantic.md`，每次呼叫現讀，所以改 prompt 檔後，下一次呼叫就用新內容，不用重新編譯。
 
 ## 測試
 
@@ -20,9 +20,9 @@
 ./gradlew :composeApp:desktopTest
 ```
 
-行為契約在 `composeApp/src/desktopTest/kotlin/com/neojou/mystudy/wiki/WikiBehaviorTest.kt`、`IngestBehaviorTest.kt`、`ChatAgentBehaviorTest.kt` 與 `DeepResearchBehaviorTest.kt`。改檢索、送出的 prompt 形狀、ingest 的寫入守衛、Chat 的工具迴圈、深度研究的搜尋與寫入時，測試一起改。文件與測試不一致時，以測試與目前程式為準，再把文件改到一致。
+行為契約在 `composeApp/src/desktopTest/kotlin/com/neojou/mystudy/wiki/WikiBehaviorTest.kt`、`IngestBehaviorTest.kt`、`ChatAgentBehaviorTest.kt`、`DeepResearchBehaviorTest.kt` 與 `WikiLintBehaviorTest.kt`。改檢索、送出的 prompt 形狀、ingest 的寫入守衛、Chat 的工具迴圈、深度研究的搜尋與寫入、Wiki Lint 的規則與寫入時，測試一起改。文件與測試不一致時，以測試與目前程式為準，再把文件改到一致。
 
-Lexical Ask 的測試鎖了哪些句子，見 `docs/programming/How-To-do-wiki-Ask.md`。Chat Agent 的測試鎖了哪些查詢與預算，見 `docs/programming/How-To-do-wiki-Chat.md`。Ingest 的測試鎖了哪些路徑，見 `docs/programming/How-To-do-Ingest.md`。深度研究的測試鎖了哪些引用與寫入，見 `docs/programming/How-To-do-Deep-Research.md`。
+Lexical Ask 的測試鎖了哪些句子，見 `docs/programming/How-To-do-wiki-Ask.md`。Chat Agent 的測試鎖了哪些查詢與預算，見 `docs/programming/How-To-do-wiki-Chat.md`。Ingest 的測試鎖了哪些路徑，見 `docs/programming/How-To-do-Ingest.md`。深度研究的測試鎖了哪些引用與寫入，見 `docs/programming/How-To-do-Deep-Research.md`。Wiki Lint 的測試鎖了哪些規則與批次，見 `docs/programming/How-To-do-Wiki-Lint.md`。
 
 ## 打包時的 prompt
 

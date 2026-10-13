@@ -90,7 +90,7 @@ private fun ReviewList(controller: StudyController, modifier: Modifier) {
     val reviews = controller.reviews
     Column(modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         if (reviews.isEmpty()) {
-            Text("目前沒有待研究項目（Ingest 時勾選 REVIEW 會加入）")
+            Text("目前沒有待研究項目（Ingest 或 Lint 加入）")
             return@Column
         }
         val reason = controller.researchBlockText()

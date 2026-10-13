@@ -102,7 +102,7 @@ llm_wiki 直接存檔。mystudy Ingest 是「確認前不寫磁碟」。建議�
   - 頂部：SearXNG 狀態列（綠/紅＋URL＋「重新測試」＋「前往設定」）、「重新整理」（重讀 review.md）。
   - 左：review 清單卡片（type 標籤、標題、描述摘要、SEARCH chips、source、「深度研究」按鈕）。
   - 右：進行中任務面板（階段、搜尋命中清單、串流綜整、錯誤與「重試」、完成後頁面連結）。
-  - 空狀態：review.md 不存在或無項目 → 「目前沒有待研究項目（Ingest 時勾選 REVIEW 會加入）」。
+  - 空狀態：review.md 不存在或無項目 → 「目前沒有待研究項目（Ingest 或 Lint 加入）」。
 - `SettingsPane`：新增「SearXNG URL」欄位＋「測試連線」按鈕＋結果文字；空白存回預設值。
 
 ## 9. 程式落點（建議）

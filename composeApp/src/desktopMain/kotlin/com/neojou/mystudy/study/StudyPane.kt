@@ -68,6 +68,7 @@ actual fun StudyPane(
                     StudyMode.Browse -> BrowsePane(controller, Modifier.fillMaxSize())
                     StudyMode.Chat -> ChatPane(controller, Modifier.fillMaxSize())
                     StudyMode.Ask -> AskPane(controller, Modifier.fillMaxSize())
+                    StudyMode.Lint -> LintPane(controller, onMode, Modifier.fillMaxSize())
                     StudyMode.DeepResearch -> DeepResearchPane(controller, onMode, Modifier.fillMaxSize())
                     StudyMode.Settings -> SettingsPane(controller, Modifier.fillMaxSize())
                 }

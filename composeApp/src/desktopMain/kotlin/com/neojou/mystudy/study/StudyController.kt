@@ -24,7 +24,23 @@ import com.neojou.mystudy.wiki.ingest.IngestInput
 import com.neojou.mystudy.wiki.ingest.IngestPipeline
 import com.neojou.mystudy.wiki.ingest.IngestResult
 import com.neojou.mystudy.wiki.ingest.vaultRelative
+import com.neojou.mystudy.wiki.lint.LintFinding
+import com.neojou.mystudy.wiki.lint.LintPage
+import com.neojou.mystudy.wiki.lint.LintConfig
+import com.neojou.mystudy.wiki.lint.LintProgress
+import com.neojou.mystudy.wiki.lint.appendLintReviews
+import com.neojou.mystudy.wiki.lint.formatSemantic
+import com.neojou.mystudy.wiki.lint.formatStructural
+import com.neojou.mystudy.wiki.lint.lintSnapshot
+import com.neojou.mystudy.wiki.lint.markExisting
+import com.neojou.mystudy.wiki.lint.mergeLintFindings
+import com.neojou.mystudy.wiki.lint.parseIgnoreList
+import com.neojou.mystudy.wiki.lint.runSemanticLint
+import com.neojou.mystudy.wiki.lint.runStructuralLint
+import com.neojou.mystudy.wiki.lint.toReviewProposals
 import com.neojou.mystudy.wiki.model.DraftProposal
+import com.neojou.mystudy.wiki.model.Resolution
+import com.neojou.mystudy.wiki.ollama.ChatClient
 import com.neojou.mystudy.wiki.ollama.OllamaClient
 import com.neojou.mystudy.wiki.prompt.locateAiPrompts
 import com.neojou.mystudy.wiki.research.ResearchPhase
@@ -67,7 +83,9 @@ import java.nio.file.Path
 import kotlin.io.path.readText
 import java.time.LocalDate
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.io.path.isDirectory
 
 data class ChatBubble(
@@ -195,6 +213,25 @@ class StudyController(
     var reviews by mutableStateOf<List<ReviewEntry>>(emptyList())
         private set
 
+    var lintFindings by mutableStateOf<List<LintFinding>>(emptyList())
+        private set
+    var lintPages by mutableStateOf<List<LintPage>>(emptyList())
+        private set
+    var lintWarnings by mutableStateOf<List<String>>(emptyList())
+        private set
+    var lintChecked by mutableStateOf<Set<String>>(emptySet())
+        private set
+    var lintStructuralText by mutableStateOf("")
+        private set
+    var lintSemanticText by mutableStateOf("")
+        private set
+    var lintMessage by mutableStateOf("")
+        private set
+    var lintRunning by mutableStateOf(false)
+        private set
+    var lintIgnoreText by mutableStateOf("")
+        private set
+
     var pendingMode by mutableStateOf<StudyMode?>(null)
         private set
     @Volatile private var index: WikiIndex? = null
@@ -205,6 +242,9 @@ class StudyController(
     private var ingestGeneration = 0
     private var researchJob: Job? = null
     private var researchGeneration = 0
+    private var lintJob: Job? = null
+    private var lintGeneration = 0
+    private val lintStop = AtomicBoolean(false)
     private val researchGate = AtomicInteger(0)
     private var researchTarget: ReviewEntry? = null
     private var searxngGeneration = 0
@@ -996,6 +1036,271 @@ class StudyController(
         }
     }
 
+    fun setLintSemantic(enabled: Boolean) {
+        if (lintRunning) return
+        settings = appSettings.save(settings.copy(lintSemantic = enabled))
+    }
+
+    fun updateLintIgnore(text: String) {
+        lintIgnoreText = text
+        val root = wikiRoot ?: return
+        appSettings.saveLintIgnore(root, text)
+    }
+
+    fun toggleLint(id: String) {
+        val finding = lintFindings.firstOrNull { it.id == id } ?: return
+        if (finding.reviewType == null || finding.alreadyInReview || lintRunning) return
+        lintChecked = if (id in lintChecked) lintChecked - id else lintChecked + id
+    }
+
+    fun selectAllLint() {
+        if (lintRunning) return
+        lintChecked = lintFindings.filter { it.reviewType != null && !it.alreadyInReview }.map { it.id }.toSet()
+    }
+
+    fun selectNoneLint() {
+        if (lintRunning) return
+        lintChecked = emptySet()
+    }
+
+    fun openLintPage(path: String) {
+        pendingMode = StudyMode.Browse
+        openIndexed(path)
+    }
+
+    fun startLint() {
+        if (lintRunning) return
+        val root = wikiRoot ?: return
+        lintStop.set(false)
+        val token = ++lintGeneration
+        val wantSemantic = settings.lintSemantic
+        val ignore = parseIgnoreList(lintIgnoreText)
+        appSettings.saveLintIgnore(root, lintIgnoreText)
+        val numCtx = settings.ollamaNumCtx
+        val baseUrl = settings.ollamaBaseUrl
+        val model = settings.ollamaModel
+        lintRunning = true
+        lintFindings = emptyList()
+        lintPages = emptyList()
+        lintWarnings = emptyList()
+        lintChecked = emptySet()
+        lintMessage = ""
+        lintStructuralText = "本地規則：準備中"
+        lintSemanticText = if (wantSemantic) "語意健檢：準備中" else ""
+        val findingsBox = AtomicReference<List<LintFinding>>(emptyList())
+        val warningsBox = AtomicReference<List<String>>(emptyList())
+        val structuralDone = AtomicInteger(0)
+        val structuralTotal = AtomicInteger(0)
+        val semanticDone = AtomicInteger(0)
+        val semanticTotal = AtomicInteger(0)
+        val progressEpoch = AtomicInteger(0)
+        lintJob = scope.launch {
+            try {
+                val snapshot = withContext(dbDispatcher) {
+                    val current = index ?: return@withContext null
+                    lintSnapshot(current)
+                }
+                if (token != lintGeneration) return@launch
+                if (snapshot == null || snapshot.pages.isEmpty()) {
+                    lintStructuralText = "沒有可檢查的 wiki 頁。"
+                    lintSemanticText = ""
+                    return@launch
+                }
+                lintPages = snapshot.pages
+                val resolver = { name: String -> snapshot.resolutions[name] ?: Resolution.None }
+                val structural = withContext(Dispatchers.Default) {
+                    val result = runStructuralLint(
+                        pages = snapshot.pages,
+                        resolver = resolver,
+                        config = LintConfig(ignore = ignore),
+                        onProgress = { done, total ->
+                            structuralDone.set(done)
+                            structuralTotal.set(total)
+                            val seen = progressEpoch.get()
+                            scope.launch {
+                                if (token == lintGeneration && seen == progressEpoch.get()) {
+                                    lintStructuralText = formatStructural(done, total, cancelled = false)
+                                }
+                            }
+                        },
+                        isActive = { token == lintGeneration && !lintStop.get() },
+                    )
+                    findingsBox.set(result.findings)
+                    structuralDone.set(result.done)
+                    structuralTotal.set(result.total)
+                    result
+                }
+                if (token != lintGeneration) return@launch
+                val stoppedEarly = lintStop.get() || structural.cancelled
+                progressEpoch.incrementAndGet()
+                lintFindings = structural.findings
+                lintStructuralText = formatStructural(
+                    structural.done,
+                    structural.total,
+                    cancelled = stoppedEarly && structural.done < structural.total,
+                )
+                if (stoppedEarly) {
+                    if (wantSemantic) lintSemanticText = "語意健檢：已取消"
+                    applyLintMarks(root, token, structural.findings)
+                    return@launch
+                }
+                if (!wantSemantic) {
+                    applyLintMarks(root, token, structural.findings)
+                    return@launch
+                }
+                val outcome = withContext(Dispatchers.IO) {
+                    val result = runSemanticLint(
+                        pages = snapshot.pages,
+                        resolver = resolver,
+                        prompts = locateAiPrompts(),
+                        numCtx = numCtx,
+                        client = ChatClient { request ->
+                            OllamaClient(baseUrl, model, numCtx).complete(request)
+                        },
+                        onProgress = { progress ->
+                            val seen = progressEpoch.get()
+                            scope.launch {
+                                if (token == lintGeneration && seen == progressEpoch.get()) {
+                                    lintSemanticText = formatSemantic(progress)
+                                }
+                            }
+                        },
+                        isActive = { token == lintGeneration && !lintStop.get() },
+                    )
+                    val merged = mergeLintFindings(structural.findings, result.findings)
+                    findingsBox.set(merged)
+                    warningsBox.set(result.warnings)
+                    semanticDone.set(result.completedBatches)
+                    semanticTotal.set(result.totalBatches)
+                    result
+                }
+                if (token != lintGeneration) return@launch
+                progressEpoch.incrementAndGet()
+                lintSemanticText = when {
+                    outcome.cancelled -> formatSemantic(
+                        LintProgress.Semantic(
+                            outcome.completedBatches,
+                            outcome.totalBatches,
+                            0,
+                            0,
+                            com.neojou.mystudy.wiki.lint.SemanticPhase.Cancelled,
+                            "",
+                        ),
+                    )
+                    outcome.totalBatches > 0 -> formatSemantic(
+                        LintProgress.Semantic(
+                            outcome.totalBatches,
+                            outcome.totalBatches,
+                            0,
+                            0,
+                            com.neojou.mystudy.wiki.lint.SemanticPhase.Done,
+                            "",
+                        ),
+                    )
+                    else -> outcome.warnings.firstOrNull()?.let { warning ->
+                        if (warning.startsWith("語意健檢")) warning else "語意健檢失敗：$warning"
+                    } ?: "語意健檢失敗"
+                }
+                lintWarnings = outcome.warnings.filterNot { it == lintSemanticText }
+                applyLintMarks(root, token, findingsBox.get())
+            } catch (cancel: CancellationException) {
+                if (token == lintGeneration) {
+                    lintFindings = findingsBox.get()
+                    lintWarnings = warningsBox.get()
+                    val pagesDone = structuralDone.get()
+                    val pagesTotal = structuralTotal.get()
+                    if (pagesTotal > 0 && pagesDone < pagesTotal) {
+                        lintStructuralText = formatStructural(pagesDone, pagesTotal, cancelled = true)
+                    }
+                    if (wantSemantic && semanticTotal.get() > 0) {
+                        lintSemanticText = formatSemantic(
+                            LintProgress.Semantic(
+                                semanticDone.get(),
+                                semanticTotal.get(),
+                                0,
+                                0,
+                                com.neojou.mystudy.wiki.lint.SemanticPhase.Cancelled,
+                                "",
+                            ),
+                        )
+                    }
+                    lintChecked = lintFindings.filter { it.defaultChecked && !it.alreadyInReview }.map { it.id }.toSet()
+                }
+                throw cancel
+            } catch (caught: Exception) {
+                if (token == lintGeneration) lintMessage = caught.message ?: "Lint failed."
+            } finally {
+                if (token == lintGeneration) lintRunning = false
+            }
+        }
+    }
+
+    fun cancelLint() {
+        if (!lintRunning) return
+        lintStop.set(true)
+        lintJob?.cancel()
+    }
+
+    fun writeLintReviews() {
+        if (lintRunning) return
+        val root = wikiRoot ?: return
+        val selected = lintFindings.filter { it.id in lintChecked && it.reviewType != null && !it.alreadyInReview }
+        if (selected.isEmpty()) return
+        val titles = lintPages.associate { it.path to it.title }
+        val proposals = toReviewProposals(selected, selected.map { it.id }.toSet()) { path ->
+            titles[path]?.ifBlank { null } ?: path.substringAfterLast('/').removeSuffix(".md")
+        }
+        scope.launch {
+            val result = withContext(Dispatchers.IO) {
+                appendLintReviews(Path.of(root), proposals, LocalDate.now(), writeLog = true)
+            }
+            if (wikiRoot != root) return@launch
+            lintMessage = result.message
+            if (!result.wrote) return@launch
+            val text = withContext(Dispatchers.IO) {
+                readTextIfExists(Path.of(root).resolve("wiki").resolve("review.md")).orEmpty()
+            }
+            if (wikiRoot != root) return@launch
+            lintFindings = markExisting(lintFindings, parseReviewFile(text))
+            lintChecked = emptySet()
+            reloadReviews()
+            val snapshot = withContext(dbDispatcher) {
+                index?.reconcileAll()
+                (index?.noteCount() ?: 0) to (index?.listSummaries().orEmpty())
+            }
+            if (wikiRoot == root) {
+                noteCount = snapshot.first
+                summaries = snapshot.second
+                treeTick += 1
+            }
+        }
+    }
+
+    private suspend fun applyLintMarks(root: String, token: Int, findings: List<LintFinding>) {
+        val text = withContext(Dispatchers.IO) {
+            readTextIfExists(Path.of(root).resolve("wiki").resolve("review.md")).orEmpty()
+        }
+        if (token != lintGeneration || wikiRoot != root) return
+        val marked = markExisting(findings, parseReviewFile(text))
+        lintFindings = marked
+        lintChecked = marked.filter { it.defaultChecked && !it.alreadyInReview }.map { it.id }.toSet()
+    }
+
+    private fun resetLint(root: String?) {
+        lintStop.set(true)
+        lintGeneration += 1
+        lintJob?.cancel()
+        lintRunning = false
+        lintFindings = emptyList()
+        lintPages = emptyList()
+        lintWarnings = emptyList()
+        lintChecked = emptySet()
+        lintStructuralText = ""
+        lintSemanticText = ""
+        lintMessage = ""
+        lintIgnoreText = if (root.isNullOrBlank()) "" else appSettings.lintIgnore(root)
+    }
+
     fun close() {
         chatGeneration += 1
         chatJob?.cancel()
@@ -1003,6 +1308,9 @@ class StudyController(
         ingestJob?.cancel()
         researchGeneration += 1
         researchJob?.cancel()
+        lintGeneration += 1
+        lintStop.set(true)
+        lintJob?.cancel()
         researchGate.set(0)
         searxngGeneration += 1
         generation += 1
@@ -1017,6 +1325,7 @@ class StudyController(
     private suspend fun showMissing(path: String) {
         closeIndex()
         wikiRoot = null
+        resetLint(null)
         showCreate = false
         noteCount = 0
         summaries = emptyList()
@@ -1027,6 +1336,7 @@ class StudyController(
     private suspend fun showNone() {
         closeIndex()
         wikiRoot = null
+        resetLint(null)
         noteCount = 0
         summaries = emptyList()
         status = "No wiki root in this vault."
@@ -1034,6 +1344,7 @@ class StudyController(
     }
 
     private suspend fun loadRoot(root: Path, gen: Int) {
+        resetLint(null)
         busy = true
         try {
             val opened = withContext(dbDispatcher) {
@@ -1051,6 +1362,7 @@ class StudyController(
             val count = withContext(dbDispatcher) { opened.noteCount() }
             val listed = withContext(dbDispatcher) { opened.listSummaries() }
             wikiRoot = root.toString()
+            lintIgnoreText = appSettings.lintIgnore(root.toString())
             noteCount = count
             summaries = listed
             searchHits = listed

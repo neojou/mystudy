@@ -12,6 +12,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -34,6 +35,16 @@ data class NoteSummary(
     val path: String,
     val title: String,
     val type: String,
+)
+
+data class IndexedNote(
+    val path: String,
+    val title: String,
+    val type: String,
+    val tags: List<String>,
+    val aliases: List<String>,
+    val body: String,
+    val oversized: Boolean,
 )
 
 data class NoteRecord(
@@ -267,6 +278,41 @@ fun searchLike(term: String, limit: Int): List<String> {
         "SELECT path FROM notes WHERE path = ?",
         relative,
     ) != null
+
+    /**
+     * Wiki pages Ask would see, plus the oversized flag.
+     * `index.md`, `log.md`, `schema.md`, and `review.md` are absent.
+     */
+    fun indexedNotes(): List<IndexedNote> {
+        val out = mutableListOf<IndexedNote>()
+        connection.createStatement().use { statement ->
+            statement.executeQuery(
+                """
+                SELECT path, title, type, body, frontmatter_json
+                FROM notes
+                WHERE path LIKE 'wiki/%'
+                  AND path NOT IN ('wiki/index.md', 'wiki/log.md', 'wiki/schema.md', 'wiki/review.md')
+                ORDER BY path
+                """.trimIndent(),
+            ).use { rows ->
+                while (rows.next()) {
+                    val front = parseJsonObject(rows.getString(5) ?: "")
+                    val flag = front["oversized"] as? JsonPrimitive
+                    val oversized = flag?.contentOrNull == "true"
+                    out += IndexedNote(
+                        path = rows.getString(1),
+                        title = rows.getString(2) ?: "",
+                        type = rows.getString(3) ?: "",
+                        tags = jsonList(front, "tags"),
+                        aliases = jsonList(front, "aliases"),
+                        body = rows.getString(4) ?: "",
+                        oversized = oversized,
+                    )
+                }
+            }
+        }
+        return out
+    }
 
     fun notesForAsk(): List<NoteRecord> {
         val out = mutableListOf<NoteRecord>()
