@@ -47,6 +47,11 @@
 | `Ctrl/Cmd+S` | 編輯中且有未存變更時存檔，並吃掉按鍵。 |
 | `Ctrl/Cmd+\` | 開合側欄。 |
 | `Ctrl/Cmd+Z` / `Y` | 不攔截。復原是 `TextFieldState` 內建的。 |
+| macOS `⌘[`／`⌘]`，以及 `⌘⌥←`／`⌘⌥→` | 預覽區返回／前進。Home 且已開檔才動作。 |
+| Windows／Linux `Alt+←`／`Alt+→` | 返回／前進。只在閱讀模式攔截。編輯中留給文字游標。 |
+| Windows／Linux `Ctrl+Alt+←`／`Ctrl+Alt+→` | 返回／前進。閱讀與編輯都吃。 |
+
+導覽歷史的按鈕、停用與捲動見 `docs/programming/How-To-do-Navigation-History.md`。不綁 `Ctrl+[`。
 
 子模式在 `StudyController.ui`，鍵是 `ui.editorSubMode`（`live` 或 `source`）。不認得的值用即時預覽。切換子模式不增加 `editorEpoch`。`editorEpoch` 仍只在載入、捨棄、重載時增加。
 

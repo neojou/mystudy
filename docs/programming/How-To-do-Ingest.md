@@ -22,7 +22,7 @@ Vault 是 Obsidian 庫根（例：`第二大腦`）。Wiki root 是同時有 `ra
 
 Wiki 選單沒有 Ingest。Browse、Chat、Ask (keyword) 在 Wiki 選單。
 
-1. 左側點一則檔案：`FileTreePane` → `StudyController.previewFile`。換檔會取消進行中的 ingest。
+1. 左側點一則檔案：`FileTreePane` → `StudyController.requestOpen`。換檔會取消進行中的 ingest。
 2. 右側 Ingest 按鈕在 `previewOffersIngest` 為真時可按。分析與產生的提示是 `Ingest reads this note, then asks before writing wiki pages.` Symbolic link only 的提示是 `Ingest creates a symbolic link under raw/sources/.`
 3. 按 Ingest：`ingestPreview` 只處理目前這一檔。沒有 wiki root 時開 Create wiki，訊息是 `Create a wiki root before ingest.` Symbolic link only 在 IO 上建 link 就結束。進行中是 `Linking…`。新建是 `Linked raw/sources/….`，重用是 `Already linked at raw/sources/….`。失敗用 `linkIntoRawSource` 的句子。分析與產生才繼續下面的模型呼叫。
 4. 分析與產生時，讀檔與兩次模型呼叫在 `Dispatchers.IO`。索引的 `resolve`、`findSourceForRaw`、`noteExists` 用 `runBlocking(wiki-index)`，而且只從 IO 執行緒呼叫。模型呼叫不佔 `wiki-index`。

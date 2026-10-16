@@ -72,10 +72,11 @@ fun MarkdownText(
     onWikilink: (String) -> Unit = {},
     limitWidth: Boolean = false,
     lazy: Boolean = false,
+    readingListState: androidx.compose.foundation.lazy.LazyListState? = null,
 ) {
     val doc = rememberMarkdownDocument(markdown)
     if (lazy && style == MarkdownStyle.Document) {
-        LazyDocument(doc, onWikilink, limitWidth, modifier)
+        LazyDocument(doc, onWikilink, limitWidth, modifier, readingListState)
     } else {
         SelectionContainer(modifier) {
             Column(Modifier.fillMaxWidth()) {
@@ -110,8 +111,9 @@ private fun LazyDocument(
     onWikilink: (String) -> Unit,
     limitWidth: Boolean,
     modifier: Modifier,
+    readingListState: androidx.compose.foundation.lazy.LazyListState?,
 ) {
-    val list = rememberLazyListState()
+    val list = readingListState ?: rememberLazyListState()
     Box(modifier) {
         SelectionContainer(Modifier.fillMaxSize()) {
             LazyColumn(

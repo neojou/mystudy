@@ -24,6 +24,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isAltPressed
 import androidx.compose.ui.input.key.isCtrlPressed
 import androidx.compose.ui.input.key.isMetaPressed
 import androidx.compose.ui.input.key.isShiftPressed
@@ -84,6 +85,22 @@ actual fun StudyPane(
     Column(
         modifier.onPreviewKeyEvent { event ->
             if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+            val command = navShortcut(
+                key = navKeyOf(event.key),
+                ctrl = event.isCtrlPressed,
+                meta = event.isMetaPressed,
+                alt = event.isAltPressed,
+                shift = event.isShiftPressed,
+                editing = controller.noteMode == NoteViewMode.Editing && controller.noteCanEdit,
+                mac = isMacOs(System.getProperty("os.name").orEmpty()),
+            )
+            if (command != null && mode == StudyMode.Home && controller.previewPath != null) {
+                when (command) {
+                    NavCommand.Back -> controller.goBack()
+                    NavCommand.Forward -> controller.goForward()
+                }
+                return@onPreviewKeyEvent true
+            }
             if (event.isShiftPressed) return@onPreviewKeyEvent false
             if (!event.isCtrlPressed && !event.isMetaPressed) return@onPreviewKeyEvent false
             if (event.key != Key.Backslash) return@onPreviewKeyEvent false
@@ -186,4 +203,12 @@ actual fun StudyPane(
             onCancel = controller::cancelConflict,
         )
     }
+}
+
+private fun navKeyOf(key: Key): NavKey = when (key) {
+    Key.LeftBracket -> NavKey.LeftBracket
+    Key.RightBracket -> NavKey.RightBracket
+    Key.DirectionLeft -> NavKey.Left
+    Key.DirectionRight -> NavKey.Right
+    else -> NavKey.Other
 }

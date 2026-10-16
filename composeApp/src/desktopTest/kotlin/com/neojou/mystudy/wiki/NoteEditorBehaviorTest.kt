@@ -3,6 +3,7 @@ package com.neojou.mystudy.wiki
 import com.neojou.mystudy.study.ExternalEffect
 import com.neojou.mystudy.study.NotePhase
 import com.neojou.mystudy.study.NoteSession
+import com.neojou.mystudy.study.NavOrigin
 import com.neojou.mystudy.study.NoteViewMode
 import com.neojou.mystudy.study.PendingNav
 import com.neojou.mystudy.study.StudyMode
@@ -338,7 +339,8 @@ class NoteEditorBehaviorTest {
         assertNull(session.pendingNav)
         session.draft = "edited"
         assertTrue(session.requestLeave(PendingNav.OpenFile(Path.of("other.md"))))
-        assertIs<PendingNav.OpenFile>(session.pendingNav)
+        val open = assertIs<PendingNav.OpenFile>(session.pendingNav)
+        assertEquals(NavOrigin.Link, open.origin)
         session.markFailed("disk full")
         assertIs<NotePhase.Failed>(session.phase)
         assertIs<PendingNav.OpenFile>(session.pendingNav)

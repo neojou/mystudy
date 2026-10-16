@@ -6,7 +6,7 @@
 
 ## 畫面
 
-開檔一律是閱讀。不記上次模式。標頭、側欄、Live Preview、Properties 與狀態列的排列在 `docs/programming/How-To-do-UI-Layout.md`。
+從樹或 wikilink 新開的檔一律是閱讀，從頂端開始。‹ › 可以還原離開時的閱讀或編輯，以及閱讀模式的捲動位置。標頭、側欄、Live Preview、Properties 與狀態列的排列在 `docs/programming/How-To-do-UI-Layout.md`。導覽歷史在 `docs/programming/How-To-do-Navigation-History.md`。
 
 未存時標題後面有 `●`，主視窗標題是 `mystudy ●`。Ask、Chat 那些子視窗不顯示這個標記。`EditorChrome` 的這個行為不變。
 
@@ -63,7 +63,7 @@ Watcher 仍只看 wiki root。自己存檔之後的事件若雜湊等於新的�
 
 ## 離開
 
-未存時，換檔、換選單、按 Ingest、關主視窗，都先問「存檔／捨棄／取消」。取消則檔案、Ingest、模式都不動，也不取消進行中的 Ingest。存檔失敗或進入衝突時不繼續導覽。衝突處理完且筆記已乾淨，才走原本要去的地方。
+未存時，換檔、按 ‹ ›、換選單、按 Ingest、關主視窗，都先問「存檔／捨棄／取消」。取消則檔案、歷史指標、Ingest、模式都不動，也不取消進行中的 Ingest。存檔失敗或進入衝突時不繼續導覽。衝突處理完且筆記已乾淨，才走原本要去的地方。
 
 `HomeScreen` 仍擁有 `StudyMode`。它把想去的模式交給 `StudyPane`，由 controller 決定放不放行。關窗走 `EditorChrome`。`StudyController` 留在 desktop 的 `StudyPane` 裡。
 
@@ -71,7 +71,7 @@ Browse 的 `openIndexed` 仍讀索引正文，不進這個編輯器。
 
 ## 這一版不做
 
-區塊級 Live Preview（游標所在區塊才露原始碼）、`[[` 自動完成、多分頁、檔案歷史、自動合併、暗色、大綱、字級縮放。分割檢視的即時預覽與唯讀 Properties 已在 `docs/programming/How-To-do-UI-Layout.md`。
+區塊級 Live Preview（游標所在區塊才露原始碼）、`[[` 自動完成、多分頁、自動合併、暗色、大綱、字級縮放。預覽區的上一頁／下一頁在 `docs/programming/How-To-do-Navigation-History.md`。分割檢視的即時預覽與唯讀 Properties 已在 `docs/programming/How-To-do-UI-Layout.md`。
 
 ## 測試
 

@@ -19,7 +19,7 @@ sealed interface NotePhase {
 }
 
 sealed interface PendingNav {
-    data class OpenFile(val path: Path) : PendingNav
+    data class OpenFile(val path: Path, val origin: NavOrigin = NavOrigin.Link) : PendingNav
     data class SwitchMode(val mode: StudyMode) : PendingNav
     data object CloseWindow : PendingNav
     data object RunIngest : PendingNav

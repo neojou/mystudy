@@ -186,6 +186,20 @@ class StudyController(
         private set
     var noteClipboard by mutableStateOf<String?>(null)
         private set
+    var canGoBack by mutableStateOf(false)
+        private set
+    var canGoForward by mutableStateOf(false)
+        private set
+    var backLabel by mutableStateOf("")
+        private set
+    var forwardLabel by mutableStateOf("")
+        private set
+    var navMessage by mutableStateOf("")
+        private set
+    var scrollGeneration by mutableStateOf(0)
+        private set
+    var readingAnchor by mutableStateOf<ScrollAnchor?>(null)
+        private set
 
     var ingestMessage by mutableStateOf("")
         private set
@@ -302,7 +316,13 @@ class StudyController(
     private var debounce: Job? = null
     private var generation = 0
     private val noteSession = NoteSession()
+    private val navigation = NoteNavigation()
     private val saveMutex = Mutex()
+    private val navMutex = Mutex()
+    private var lastReadingScroll: ScrollAnchor? = null
+    private var pendingRestore: HistoryEntry? = null
+    private var acceptScroll = false
+    private var navEpoch = 0
     private var autosaveJob: Job? = null
     private var loadToken = 0
     private var saveEpoch = 0
@@ -500,13 +520,124 @@ class StudyController(
         }
     }
 
-    fun requestOpen(path: Path) {
-        if (sameNotePath(previewPath, path)) return
-        if (noteSession.requestLeave(PendingNav.OpenFile(path))) {
-            publishNote()
-            return
+    fun requestOpen(path: Path, origin: NavOrigin = NavOrigin.Link) {
+        if (navMutex.tryLock()) {
+            try {
+                requestOpenBody(path, origin)
+            } finally {
+                navMutex.unlock()
+            }
+        } else {
+            scope.launch {
+                navMutex.withLock { requestOpenBody(path, origin) }
+            }
         }
-        previewFile(path)
+    }
+
+    fun goBack() {
+        go(NavDirection.Back)
+    }
+
+    fun goForward() {
+        go(NavDirection.Forward)
+    }
+
+    fun rememberScroll(anchor: ScrollAnchor) {
+        if (!acceptScroll || noteLoading) return
+        if (!sameNotePath(navigation.current()?.path, previewPath)) return
+        lastReadingScroll = anchor
+        navigation.updateCurrent(noteSession.mode, anchor)
+    }
+
+    fun scrollSettled() {
+        acceptScroll = true
+    }
+
+    fun consumeReadingAnchor(): ScrollAnchor? {
+        val anchor = readingAnchor
+        readingAnchor = null
+        return anchor
+    }
+
+    private fun requestOpenBody(path: Path, origin: NavOrigin) {
+        val effect = navigation.request(
+            session = noteSession,
+            path = path,
+            origin = origin,
+            mode = noteSession.mode,
+            scroll = lastReadingScroll,
+        )
+        when (effect) {
+            is NavEffect.NeedsConfirm -> publishNote()
+            is NavEffect.Ignored -> Unit
+            is NavEffect.NoneLeft -> {
+                navMessage = effect.message
+                publishNavigation()
+            }
+            is NavEffect.Load -> beginLoad(effect)
+        }
+    }
+
+    private fun go(direction: NavDirection) {
+        if (noteSession.pendingNav != null) return
+        val epoch = navEpoch
+        scope.launch {
+            navMutex.withLock {
+                if (noteSession.pendingNav != null || epoch != navEpoch) return@withLock
+                val skipped = withContext(Dispatchers.IO) {
+                    navigation.skipMissing(direction, ::isExistingNote)
+                }
+                if (noteSession.pendingNav != null || epoch != navEpoch) {
+                    publishNavigation()
+                    return@withLock
+                }
+                when (skipped) {
+                    is SkipResult.Found -> {
+                        val origin = if (direction == NavDirection.Back) NavOrigin.Back else NavOrigin.Forward
+                        requestOpenBody(skipped.path, origin)
+                    }
+                    is SkipResult.NoneLeft -> {
+                        navMessage = skipped.message
+                        publishNavigation()
+                    }
+                    SkipResult.Empty -> publishNavigation()
+                }
+            }
+        }
+    }
+
+    private fun beginLoad(effect: NavEffect.Load) {
+        navEpoch++
+        acceptScroll = false
+        navMessage = ""
+        pendingRestore = effect.restore
+        readingAnchor = effect.restore?.scroll
+        scrollGeneration++
+        publishNavigation()
+        previewFile(effect.path)
+        revealInTree(effect.path)
+    }
+
+    private fun applyRestore(token: Int) {
+        if (token != loadToken) return
+        val entry = pendingRestore ?: return
+        if (!sameNotePath(entry.path, noteSession.path)) return
+        pendingRestore = null
+        noteSession.mode = restoredMode(
+            entry.mode,
+            noteSession.permission is EditPermission.Editable,
+        )
+    }
+
+    private fun rememberMode() {
+        navigation.updateCurrent(noteSession.mode, lastReadingScroll)
+    }
+
+    private fun publishNavigation() {
+        canGoBack = navigation.canGoBack
+        canGoForward = navigation.canGoForward
+        backLabel = navigation.peek(NavDirection.Back)?.path?.fileName?.toString().orEmpty()
+        forwardLabel = navigation.peek(NavDirection.Forward)?.path?.fileName?.toString().orEmpty()
     }
 
     fun previewFile(path: Path) {
@@ -547,6 +678,7 @@ class StudyController(
             if (token != loadToken) return@launch
             noteLoading = false
             noteSession.open(path, loaded, token)
+            applyRestore(token)
             editorEpoch++
             publishNote()
         }
@@ -586,6 +718,7 @@ class StudyController(
             NoteViewMode.Reading
         }
         publishNote()
+        rememberMode()
         checkExternal()
     }
 
@@ -593,6 +726,7 @@ class StudyController(
         if (noteSession.mode == NoteViewMode.Reading) return
         noteSession.mode = NoteViewMode.Reading
         publishNote()
+        rememberMode()
         checkExternal()
     }
 
@@ -601,6 +735,7 @@ class StudyController(
         if (noteSession.mode == NoteViewMode.Editing) return
         noteSession.mode = NoteViewMode.Editing
         publishNote()
+        rememberMode()
         checkExternal()
     }
 
@@ -656,7 +791,7 @@ class StudyController(
                 index?.resolve(trimmed) ?: Resolution.None
             }
             if (resolved !is Resolution.One) return@launch
-            requestOpen(Path.of(root).resolve(resolved.path))
+            requestOpen(Path.of(root).resolve(resolved.path), NavOrigin.Link)
         }
     }
 
@@ -1805,7 +1940,10 @@ class StudyController(
 
     private fun performNav(nav: PendingNav) {
         when (nav) {
-            is PendingNav.OpenFile -> previewFile(nav.path)
+            is PendingNav.OpenFile -> {
+                val effect = navigation.commitPending(nav, noteSession.mode, lastReadingScroll)
+                if (effect is NavEffect.Load) beginLoad(effect)
+            }
             is PendingNav.SwitchMode -> approvedMode = nav.mode
             PendingNav.CloseWindow -> {
                 val exit = closeAction
@@ -1935,11 +2073,14 @@ class StudyController(
         previewPath = null
         previewTitle = ""
         previewBody = ""
+        navEpoch++
+        navigation.clear()
+        lastReadingScroll = null
+        pendingRestore = null
+        acceptScroll = false
+        readingAnchor = null
+        navMessage = ""
         publishNote()
-    }
-
-    private fun sameNotePath(left: Path?, right: Path): Boolean {
-        if (left == null) return false
-        return left.toAbsolutePath().normalize() == right.toAbsolutePath().normalize()
+        publishNavigation()
     }
 }

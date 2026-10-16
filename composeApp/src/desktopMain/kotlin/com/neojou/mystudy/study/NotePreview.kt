@@ -1,6 +1,10 @@
 package com.neojou.mystudy.study
 
 import androidx.compose.foundation.VerticalScrollbar
+import androidx.compose.foundation.border
+import androidx.compose.foundation.hoverable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -13,6 +17,8 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.rememberScrollbarAdapter
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.input.TextFieldLineLimits
@@ -22,6 +28,8 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.IconButtonDefaults
+import androidx.compose.material3.LocalMinimumInteractiveComponentSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.PlainTooltip
 import androidx.compose.material3.SegmentedButton
@@ -34,11 +42,15 @@ import androidx.compose.material3.TooltipBox
 import androidx.compose.material3.TooltipDefaults
 import androidx.compose.material3.rememberTooltipState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
@@ -49,8 +61,13 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.isBackPressed
+import androidx.compose.ui.input.pointer.isForwardPressed
+import androidx.compose.ui.input.pointer.onPointerEvent
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.foundation.ScrollState
@@ -60,8 +77,10 @@ import com.neojou.mystudy.ui.theme.LocalStudyTokens
 import com.neojou.mystudy.wiki.settings.EditorSubMode
 import com.neojou.mystudy.wiki.settings.ingestIdleHint
 import java.nio.file.Path
+import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.first
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalComposeUiApi::class)
 @Composable
 fun NotePreview(controller: StudyController, modifier: Modifier = Modifier) {
     val clipboard = LocalClipboardManager.current
@@ -73,6 +92,35 @@ fun NotePreview(controller: StudyController, modifier: Modifier = Modifier) {
         snapshotFlow { editor.text.toString() }.collect { controller.setNoteDraft(epoch, it) }
     }
     val editing = controller.noteMode == NoteViewMode.Editing && controller.noteCanEdit
+    val readingListState = rememberLazyListState()
+    var scrollReady by remember { mutableStateOf(false) }
+    val macOs = remember { isMacOs(System.getProperty("os.name").orEmpty()) }
+    LaunchedEffect(controller.scrollGeneration) {
+        scrollReady = false
+        snapshotFlow { controller.noteLoading }.first { !it }
+        val editingNow = controller.noteMode == NoteViewMode.Editing && controller.noteCanEdit
+        if (!editingNow) {
+            val anchor = controller.consumeReadingAnchor()
+            if (anchor != null) {
+                snapshotFlow { readingListState.layoutInfo.totalItemsCount }.first { it > 0 }
+                val clamped = clampAnchor(anchor, readingListState.layoutInfo.totalItemsCount)
+                readingListState.scrollToItem(clamped.firstVisibleIndex, clamped.offset)
+            } else {
+                readingListState.scrollToItem(0)
+            }
+        }
+        controller.scrollSettled()
+        scrollReady = true
+    }
+    if (scrollReady && !editing) {
+        LaunchedEffect(readingListState) {
+            snapshotFlow {
+                readingListState.firstVisibleItemIndex to readingListState.firstVisibleItemScrollOffset
+            }.drop(1).collect { (index, offset) ->
+                controller.rememberScroll(ScrollAnchor(index, offset))
+            }
+        }
+    }
     val rendered = if (editing) editor.text.toString() else controller.noteDraft
     val vault = Path.of(controller.settings.vaultPath)
     val file = controller.previewPath
@@ -87,6 +135,19 @@ fun NotePreview(controller: StudyController, modifier: Modifier = Modifier) {
     Column(
         modifier
             .fillMaxSize()
+            .onPointerEvent(PointerEventType.Press) { event ->
+                when (navFromPointer(event.buttons.isBackPressed, event.buttons.isForwardPressed)) {
+                    NavCommand.Back -> {
+                        event.changes.forEach { it.consume() }
+                        controller.goBack()
+                    }
+                    NavCommand.Forward -> {
+                        event.changes.forEach { it.consume() }
+                        controller.goForward()
+                    }
+                    null -> Unit
+                }
+            }
             .onPreviewKeyEvent { event ->
                 if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                 if (!event.isCtrlPressed && !event.isMetaPressed) return@onPreviewKeyEvent false
@@ -117,6 +178,28 @@ fun NotePreview(controller: StudyController, modifier: Modifier = Modifier) {
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
+                if (file != null) {
+                    CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 32.dp) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                            HistoryButton(
+                                tooltip = navTooltip(NavCommand.Back, controller.backLabel, controller.canGoBack, macOs),
+                                description = "返回上一則筆記",
+                                state = if (controller.canGoBack) controller.backLabel else "沒有上一則",
+                                enabled = controller.canGoBack,
+                                forward = false,
+                                onClick = controller::goBack,
+                            )
+                            HistoryButton(
+                                tooltip = navTooltip(NavCommand.Forward, controller.forwardLabel, controller.canGoForward, macOs),
+                                description = "前進到下一則筆記",
+                                state = if (controller.canGoForward) controller.forwardLabel else "沒有下一則",
+                                enabled = controller.canGoForward,
+                                forward = true,
+                                onClick = controller::goForward,
+                            )
+                        }
+                    }
+                }
                 val title = buildString {
                     append(controller.previewTitle)
                     if (controller.noteDirty) append(" ●")
@@ -228,6 +311,7 @@ fun NotePreview(controller: StudyController, modifier: Modifier = Modifier) {
                     onWikilink = controller::openWikilink,
                     limitWidth = limitWidth,
                     lazy = true,
+                    readingListState = readingListState,
                 )
             }
         }
@@ -236,14 +320,22 @@ fun NotePreview(controller: StudyController, modifier: Modifier = Modifier) {
             mixed = controller.noteMixed,
             ingest = controller.ingestMessage,
             idle = if (controller.canIngestPreview()) ingestIdleHint(controller.settings.ingestMode) else "",
+            nav = controller.navMessage,
         )
         val trailing = "${propertyCount(rendered)} 屬性 · ${characterCount(rendered)} 字 · ${noteChromeLabel(editing, subMode)}"
         NoteStatusBar(status = controller.noteStatus, detail = detail, trailing = trailing)
     }
 }
 
-private fun statusDetail(warning: String?, mixed: Boolean, ingest: String, idle: String): String {
+private fun statusDetail(
+    warning: String?,
+    mixed: Boolean,
+    ingest: String,
+    idle: String,
+    nav: String,
+): String {
     val parts = mutableListOf<String>()
+    if (nav.isNotBlank()) parts += nav
     if (!warning.isNullOrBlank()) parts += warning
     if (mixed) parts += "換行混用 CRLF 與 LF。存檔時會依較多的一種統一，一樣多則用 LF。"
     val ingestLine = ingest.ifBlank { idle }
@@ -288,6 +380,60 @@ internal fun NoteEditorField(
             adapter = rememberScrollbarAdapter(scroll),
             modifier = Modifier.align(Alignment.CenterEnd).fillMaxHeight(),
         )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun HistoryButton(
+    tooltip: String,
+    description: String,
+    state: String,
+    enabled: Boolean,
+    forward: Boolean,
+    onClick: () -> Unit,
+) {
+    val interaction = remember { MutableInteractionSource() }
+    val focused by interaction.collectIsFocusedAsState()
+    val tint = if (enabled) {
+        MaterialTheme.colorScheme.onSurfaceVariant
+    } else {
+        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+    }
+    Hint(tooltip) {
+        Box {
+            IconButton(
+                onClick = onClick,
+                enabled = enabled,
+                interactionSource = interaction,
+                colors = IconButtonDefaults.iconButtonColors(
+                    contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                    disabledContentColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
+                ),
+                modifier = Modifier
+                    .size(32.dp)
+                    .then(
+                        if (focused) {
+                            Modifier.border(2.dp, MaterialTheme.colorScheme.primary, CircleShape)
+                        } else {
+                            Modifier
+                        },
+                    )
+                    .semantics {
+                        contentDescription = description
+                        stateDescription = state
+                    },
+            ) {
+                ChevronIcon(forward = forward, tint = tint)
+            }
+            if (!enabled) {
+                Box(
+                    Modifier
+                        .matchParentSize()
+                        .hoverable(remember { MutableInteractionSource() }),
+                )
+            }
+        }
     }
 }
 

@@ -10,6 +10,8 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.unit.dp
 
@@ -109,5 +111,21 @@ internal fun CollapseTreeIcon(modifier: Modifier = Modifier) {
         val stroke = Stroke(width = 1.6.dp.toPx())
         drawLine(tint, Offset(11.dp.toPx(), 3.dp.toPx()), Offset(5.dp.toPx(), 8.dp.toPx()), strokeWidth = stroke.width)
         drawLine(tint, Offset(5.dp.toPx(), 8.dp.toPx()), Offset(11.dp.toPx(), 13.dp.toPx()), strokeWidth = stroke.width)
+    }
+}
+
+@Composable
+internal fun ChevronIcon(forward: Boolean, tint: Color, modifier: Modifier = Modifier) {
+    Canvas(modifier.size(18.dp)) {
+        val stroke = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
+        val top = 4.dp.toPx()
+        val bottom = 14.dp.toPx()
+        val mid = size.height / 2f
+        val near = 5.dp.toPx()
+        val far = 13.dp.toPx()
+        val tip = if (forward) far else near
+        val tail = if (forward) near else far
+        drawLine(tint, Offset(tail, top), Offset(tip, mid), strokeWidth = stroke.width, cap = stroke.cap)
+        drawLine(tint, Offset(tip, mid), Offset(tail, bottom), strokeWidth = stroke.width, cap = stroke.cap)
     }
 }

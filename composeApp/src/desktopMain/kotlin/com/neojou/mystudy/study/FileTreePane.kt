@@ -109,7 +109,7 @@ fun FileTreePane(
                         expanded + key
                     }
                 },
-                onOpen = controller::requestOpen,
+                onOpen = { controller.requestOpen(it, NavOrigin.Tree) },
             )
         }
     }
