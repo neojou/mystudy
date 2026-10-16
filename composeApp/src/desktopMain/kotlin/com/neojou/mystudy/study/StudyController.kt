@@ -54,7 +54,10 @@ import com.neojou.mystudy.wiki.research.SearxngStatus
 import com.neojou.mystudy.wiki.research.parseReviewFile
 import com.neojou.mystudy.wiki.research.researchBlockReason
 import com.neojou.mystudy.wiki.settings.AppSettings
+import com.neojou.mystudy.wiki.settings.EditorSubMode
 import com.neojou.mystudy.wiki.settings.IngestMode
+import com.neojou.mystudy.wiki.settings.SIDEBAR_MAX_DP
+import com.neojou.mystudy.wiki.settings.SIDEBAR_MIN_DP
 import com.neojou.mystudy.wiki.settings.SettingsStore
 import com.neojou.mystudy.wiki.settings.StudySettings
 import com.neojou.mystudy.wiki.settings.ingestLinkMessage
@@ -116,6 +119,10 @@ class StudyController(
     }.asCoroutineDispatcher()
 
     var settings by mutableStateOf(appSettings.load())
+        private set
+    var ui by mutableStateOf(appSettings.loadUi())
+        private set
+    var treeReveal by mutableStateOf<Path?>(null)
         private set
     var status by mutableStateOf("Opening the vault…")
         private set
@@ -595,6 +602,62 @@ class StudyController(
         noteSession.mode = NoteViewMode.Editing
         publishNote()
         checkExternal()
+    }
+
+    fun setEditorSubMode(mode: EditorSubMode) {
+        if (ui.editorSubMode == mode) return
+        ui = ui.copy(editorSubMode = mode)
+        appSettings.saveEditorSubMode(mode)
+    }
+
+    fun toggleEditorSubMode() {
+        val next = if (ui.editorSubMode == EditorSubMode.LivePreview) {
+            EditorSubMode.Source
+        } else {
+            EditorSubMode.LivePreview
+        }
+        setEditorSubMode(next)
+    }
+
+    /** Stores a width in 180..560. Collapse does not call this. */
+    fun persistSidebarWidth(dp: Int) {
+        val stored = dp.coerceIn(SIDEBAR_MIN_DP, SIDEBAR_MAX_DP)
+        if (ui.sidebarWidthDp == stored) return
+        ui = ui.copy(sidebarWidthDp = stored)
+        appSettings.saveSidebarWidth(stored)
+    }
+
+    fun setLimitLineWidth(enabled: Boolean) {
+        if (ui.limitLineWidth == enabled) return
+        ui = ui.copy(limitLineWidth = enabled)
+        appSettings.saveLimitLineWidth(enabled)
+    }
+
+    fun revealInTree(path: Path) {
+        treeReveal = path
+    }
+
+    fun consumeTreeReveal(): Path? {
+        val path = treeReveal
+        treeReveal = null
+        return path
+    }
+
+    /**
+     * Opens a resolved wiki page. Unresolved and ambiguous links stay on the current note.
+     * The lookup runs on the wiki-index dispatcher.
+     */
+    fun openWikilink(token: String) {
+        val root = wikiRoot ?: return
+        val trimmed = token.trim()
+        if (trimmed.isEmpty()) return
+        scope.launch {
+            val resolved = withContext(dbDispatcher) {
+                index?.resolve(trimmed) ?: Resolution.None
+            }
+            if (resolved !is Resolution.One) return@launch
+            requestOpen(Path.of(root).resolve(resolved.path))
+        }
     }
 
     fun setNoteDraft(epoch: Int, text: String) {

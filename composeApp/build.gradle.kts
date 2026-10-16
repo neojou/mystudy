@@ -37,6 +37,7 @@ kotlin {
                 implementation(libs.sqlite.jdbc)
                 implementation(libs.kotlinx.coroutines.swing)
                 implementation(libs.kotlinx.serialization.json)
+                implementation(libs.jetbrains.markdown)
             }
         }
         val desktopTest by getting {

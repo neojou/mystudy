@@ -1,7 +1,7 @@
 package com.neojou.mystudy.study
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -15,20 +15,38 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.isMetaPressed
+import androidx.compose.ui.input.key.isShiftPressed
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
 import com.neojou.mystudy.wiki.settings.PreferencesSettingsStore
+import com.neojou.mystudy.wiki.settings.SIDEBAR_DEFAULT_DP
+import com.neojou.mystudy.wiki.settings.SIDEBAR_MAX_DP
+import com.neojou.mystudy.wiki.settings.SIDEBAR_MIN_DP
+import com.neojou.mystudy.wiki.settings.SidebarDragEnd
+import com.neojou.mystudy.wiki.settings.clampSidebarWidth
+import com.neojou.mystudy.wiki.settings.finishSidebarDrag
 
 @Composable
 actual fun StudyPane(
     mode: StudyMode,
     requestedMode: StudyMode?,
     fileBrowserOpen: Boolean,
+    onFileBrowserOpen: (Boolean) -> Unit,
     onMode: (StudyMode) -> Unit,
     onRequestHandled: () -> Unit,
     modifier: Modifier,
@@ -63,7 +81,16 @@ actual fun StudyPane(
         val text = controller.consumeNoteClipboard() ?: return@LaunchedEffect
         clipboard.setText(AnnotatedString(text))
     }
-    Column(modifier) {
+    Column(
+        modifier.onPreviewKeyEvent { event ->
+            if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+            if (event.isShiftPressed) return@onPreviewKeyEvent false
+            if (!event.isCtrlPressed && !event.isMetaPressed) return@onPreviewKeyEvent false
+            if (event.key != Key.Backslash) return@onPreviewKeyEvent false
+            onFileBrowserOpen(!fileBrowserOpen)
+            true
+        },
+    ) {
         controller.error?.let { message ->
             Row(
                 Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
@@ -78,14 +105,36 @@ actual fun StudyPane(
                 TextButton(onClick = controller::clearError) { Text("Dismiss") }
             }
         }
-        Row(Modifier.weight(1f).fillMaxWidth()) {
+        BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
+            val windowDp = maxWidth.value
+            var liveWidth by remember { mutableStateOf<Float?>(null) }
+            val visual = liveWidth ?: clampSidebarWidth(controller.ui.sidebarWidthDp.toFloat(), windowDp)
+            Row(Modifier.fillMaxSize()) {
             if (fileBrowserOpen) {
-                FileTreePane(controller, Modifier.width(260.dp).fillMaxHeight())
-                Box(
-                    Modifier
-                        .width(1.dp)
-                        .fillMaxHeight()
-                        .background(MaterialTheme.colorScheme.outlineVariant),
+                FileTreePane(
+                    controller,
+                    onCollapse = { onFileBrowserOpen(false) },
+                    modifier = Modifier.width(visual.dp).fillMaxHeight(),
+                )
+                SidebarHandle(
+                    onDragStart = { liveWidth = visual },
+                    onDrag = { delta -> liveWidth = ((liveWidth ?: visual) + delta).coerceAtLeast(0f) },
+                    onDragEnd = {
+                        val width = liveWidth
+                        liveWidth = null
+                        if (width == null) return@SidebarHandle
+                        when (val end = finishSidebarDrag(width, windowDp)) {
+                            is SidebarDragEnd.Persist -> controller.persistSidebarWidth(end.dp)
+                            SidebarDragEnd.Collapse -> onFileBrowserOpen(false)
+                        }
+                    },
+                    onNudge = { delta ->
+                        val next = clampSidebarWidth(visual + delta, windowDp)
+                            .toInt()
+                            .coerceIn(SIDEBAR_MIN_DP, SIDEBAR_MAX_DP)
+                        controller.persistSidebarWidth(next)
+                    },
+                    onReset = { controller.persistSidebarWidth(SIDEBAR_DEFAULT_DP) },
                 )
             }
             Box(Modifier.weight(1f).fillMaxHeight()) {
@@ -98,6 +147,7 @@ actual fun StudyPane(
                     StudyMode.DeepResearch -> DeepResearchPane(controller, onMode, Modifier.fillMaxSize())
                     StudyMode.Settings -> SettingsPane(controller, Modifier.fillMaxSize())
                 }
+            }
             }
         }
     }

@@ -11,6 +11,7 @@ expect fun StudyPane(
     mode: StudyMode,
     requestedMode: StudyMode?,
     fileBrowserOpen: Boolean,
+    onFileBrowserOpen: (Boolean) -> Unit,
     onMode: (StudyMode) -> Unit,
     onRequestHandled: () -> Unit,
     modifier: Modifier,

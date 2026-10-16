@@ -100,6 +100,7 @@ fun HomeScreen(about: AboutRequest) {
             mode = mode,
             requestedMode = requestedMode,
             fileBrowserOpen = fileBrowserOpen,
+            onFileBrowserOpen = { fileBrowserOpen = it },
             onMode = { mode = it },
             onRequestHandled = { requestedMode = null },
             modifier = Modifier

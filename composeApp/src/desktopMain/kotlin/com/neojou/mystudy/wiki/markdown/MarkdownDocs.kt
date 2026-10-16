@@ -25,6 +25,34 @@ fun parseWikilinks(text: String): List<String> =
 
 fun firstWikilinkTarget(text: String): String? = parseWikilinks(text).firstOrNull()
 
+sealed interface FrontmatterEntry {
+    val key: String
+
+    data class Scalar(override val key: String, val value: String) : FrontmatterEntry
+
+    data class ListValue(override val key: String, val values: List<String>) : FrontmatterEntry
+}
+
+/**
+ * Closed YAML front matter for the properties panel.
+ *
+ * [raw] is the text between the fences. It is null when there is no closed fence,
+ * including a missing closer, so the note body stays visible. [unparsed] still
+ * follows the existing field parser. A closed fence with a bad line keeps [raw]
+ * and sets [unparsed].
+ */
+data class FrontmatterView(
+    val entries: List<FrontmatterEntry>,
+    val unparsed: Boolean,
+    val raw: String?,
+)
+
+fun readFrontmatter(text: String): FrontmatterView {
+    val split = splitFrontmatter(text)
+    val raw = split.rawInner ?: return FrontmatterView(emptyList(), split.fields.unparsed, null)
+    return FrontmatterView(split.fields.ordered, split.fields.unparsed, raw)
+}
+
 fun parseNote(text: String, filenameStem: String): ParsedNote {
     val split = splitFrontmatter(text)
     val fields = split.fields
@@ -58,22 +86,24 @@ fun headingsOf(body: String): List<String> = body.lineSequence()
 private data class FrontmatterSplit(
     val fields: Fields,
     val body: String,
+    val rawInner: String?,
 )
 
 private data class Fields(
     val scalars: Map<String, String>,
     val lists: Map<String, List<String>>,
     val unparsed: Boolean,
+    val ordered: List<FrontmatterEntry> = emptyList(),
 )
 
 private fun splitFrontmatter(text: String): FrontmatterSplit {
     val normalized = text.replace("\r\n", "\n")
     if (!normalized.startsWith("---\n") && normalized.trimStart() != "---") {
-        return FrontmatterSplit(Fields(emptyMap(), emptyMap(), unparsed = false), normalized)
+        return FrontmatterSplit(Fields(emptyMap(), emptyMap(), unparsed = false), normalized, null)
     }
     val lines = normalized.split('\n')
     if (lines.first().trim() != "---") {
-        return FrontmatterSplit(Fields(emptyMap(), emptyMap(), unparsed = false), normalized)
+        return FrontmatterSplit(Fields(emptyMap(), emptyMap(), unparsed = false), normalized, null)
     }
     var end = -1
     for (index in 1 until lines.size) {
@@ -83,17 +113,23 @@ private fun splitFrontmatter(text: String): FrontmatterSplit {
         }
     }
     if (end < 0) {
-        return FrontmatterSplit(Fields(emptyMap(), emptyMap(), unparsed = true), normalized)
+        return FrontmatterSplit(Fields(emptyMap(), emptyMap(), unparsed = true), normalized, null)
     }
     val fields = parseFields(lines.subList(1, end))
     val body = lines.drop(end + 1).joinToString("\n")
-    return FrontmatterSplit(fields, body)
+    val raw = lines.subList(1, end).joinToString("\n")
+    return FrontmatterSplit(fields, body, raw)
 }
 
 private fun parseFields(lines: List<String>): Fields {
     val scalars = linkedMapOf<String, String>()
     val lists = linkedMapOf<String, List<String>>()
+    val ordered = mutableListOf<FrontmatterEntry>()
     var unparsed = false
+    fun put(entry: FrontmatterEntry) {
+        val existing = ordered.indexOfFirst { it.key == entry.key }
+        if (existing >= 0) ordered[existing] = entry else ordered += entry
+    }
     var index = 0
     while (index < lines.size) {
         val line = lines[index]
@@ -128,28 +164,36 @@ private fun parseFields(lines: List<String>): Fields {
                 cursor += 1
             }
             if (nested || items.isEmpty()) unparsed = true
-            if (items.isNotEmpty()) lists[key] = items
+            if (items.isNotEmpty()) {
+                lists[key] = items
+                put(FrontmatterEntry.ListValue(key, items))
+            }
             index = cursor
             continue
         }
         if (rest.startsWith("[") && rest.endsWith("]")) {
-            lists[key] = rest.removePrefix("[").removeSuffix("]")
+            val items = rest.removePrefix("[").removeSuffix("]")
                 .split(',')
                 .map { unquote(it.trim()) }
                 .filter { it.isNotEmpty() }
+            lists[key] = items
+            put(FrontmatterEntry.ListValue(key, items))
             index += 1
             continue
         }
         if (rest.startsWith("{") || rest.startsWith("[")) {
             unparsed = true
             scalars[key] = rest
+            put(FrontmatterEntry.Scalar(key, rest))
             index += 1
             continue
         }
-        scalars[key] = unquote(rest)
+        val value = unquote(rest)
+        scalars[key] = value
+        put(FrontmatterEntry.Scalar(key, value))
         index += 1
     }
-    return Fields(scalars, lists, unparsed)
+    return Fields(scalars, lists, unparsed, ordered)
 }
 
 private fun unquote(value: String): String {

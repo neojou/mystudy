@@ -17,7 +17,7 @@ mystudy 是桌面 Compose 應用。它對本機 Obsidian vault 做 llm-wiki 式�
 | `composeApp/src/commonMain/kotlin/com/neojou/mystudy/` | `App`、`HomeScreen`、`StudyMode`、主題、`AppVersion` |
 | `composeApp/src/commonMain/kotlin/com/neojou/tools/` | 日誌、`SystemSettings`、上方選單。這不是產品套件，改名時不動 |
 | `composeApp/src/desktopMain/kotlin/com/neojou/mystudy/` | `Main`、`StudyController`、畫面、整個 `wiki/` |
-| `composeApp/src/desktopTest/` | `WikiBehaviorTest`、`IngestBehaviorTest`、`ChatAgentBehaviorTest`、`DeepResearchBehaviorTest`、`WikiLintBehaviorTest`。檢索、prompt 形狀、寫入守衛、Ingest、Chat 工具迴圈、深度研究、Wiki Lint 的契約在這裡 |
+| `composeApp/src/desktopTest/` | `WikiBehaviorTest`、`IngestBehaviorTest`、`ChatAgentBehaviorTest`、`DeepResearchBehaviorTest`、`WikiLintBehaviorTest`、`NoteEditorBehaviorTest`、`MarkdownDocumentTest`、`PropertiesViewTest`、`UiPrefsTest`、`UiChromeTest`。檢索、prompt 形狀、寫入守衛、Ingest、Chat 工具迴圈、深度研究、Wiki Lint、筆記存檔、Markdown 與版面偏好的契約在這裡 |
 | `ai-prompts/` | 送給模型的 prompt。一個動作一個檔 |
 
 `wiki/` 再分成 agent、ask、ingest、lint、research、index、markdown、model、ollama、prompt、settings、vault。`wiki/agent/` 是 Chat Agent（協定、`wiki.search`、`wiki.read_page`、迴圈）。`wiki/lint/` 是 Wiki Lint（本地規則、語意分批、寫 review）。`wiki/research/` 是深度研究（review 解析、SearXNG、寫頁）。檔案系統、SQLite、Ollama、SearXNG 都在 desktopMain，因為它們用的是本機 JVM API。`StudyMode` 在 commonMain。
@@ -26,7 +26,9 @@ mystudy 是桌面 Compose 應用。它對本機 Obsidian vault 做 llm-wiki 式�
 
 `StudyMode` 有 Home、Browse、Chat、Ask、Lint、DeepResearch、Settings。Wiki 選單順序是 Browse、Chat、Ask (keyword)、Lint（自動健檢 wiki）。「深度研究」是 Wiki 與 Settings 之間的頂層項目。Settings 是上方獨立項目。預覽區的 Ingest 按鈕留在 Home，不在 Wiki 選單裡。沒有 Ingest 模式，也沒有 `IngestPane`。
 
-`HomeScreen` 左上角打開檔案樹，預設是開的。樹沒有右鍵選單：Compose 的 `ContextMenuArea` 會和列上的點擊搶同一下 pointer down。動作放在預覽區按鈕。樹根標籤用 vault 路徑的最後一段；Settings 顯示完整路徑。
+`HomeScreen` 左上角打開檔案樹，預設是開的。開或合只在這次執行的記憶體，啟動時展開。寬度可拖，拖曳結束才寫入 Preferences；低於 120 dp 收合且不記下那個窄寬度。樹沒有右鍵選單：Compose 的 `ContextMenuArea` 會和列上的點擊搶同一下 pointer down。動作放在預覽區按鈕。區段標題是「Vault」。樹根標籤用 vault 路徑的最後一段；Settings 顯示完整路徑。長檔名的絕對路徑在 tooltip。目前檔案以淺色底加左側直條標出。
+
+筆記閱讀與 Chat、Ask 答案共用 `study/markdown` 的解析。筆記用 Document 樣式（可限寬 760 dp、可顯示唯讀 Properties）。Chat 與 Ask 用 Compact，不限寬、不顯示 Properties。深度研究、Browse、Ask/Chat 的頁面閱讀仍是純文字。解析在呼叫端進行；長文改走 `Dispatchers.Default`，不佔 `wiki-index`。`[[wikilink]]` 只有在那條 dispatcher 上 `resolve` 到唯一一頁時才打開。閱讀模式不寫檔。細節在 `docs/programming/How-To-do-UI-Layout.md`。
 
 系統選單列在應用程式名稱右邊有 Windows。它列出目前開著的 Compose `Window`：主視窗、Ask 與 Chat 的知識圖、頁面視窗。About、寫入確認這類對話框不在清單裡。點一項會還原該視窗並把它帶到前面。每一扇視窗都掛這個選單，焦點在子視窗時它還在。
 
@@ -70,7 +72,7 @@ Wiki 頁在 `{wikiRoot}/wiki/`（sources、concepts、entities、queries、index
 
 Ask 用的 SQLite 在 `~/Library/Application Support/mystudy/index/{sha256}.sqlite`。雜湊的是 wiki root canonical 路徑。這個路徑寫死在 macOS 的 Application Support，檔案不進 vault。
 
-偏好在 Java Preferences 節點 `com/neojou/mystudy/wiki`，同樣不進 vault。內容是 vault 路徑、wiki root、Ollama URL、模型、`num_ctx`、SearXNG URL、Ingest 模式、`lintSemantic`、`noteAutosave`。預設 URL 是 `http://127.0.0.1:11434/v1`，模型 `gemma4-64k`，`num_ctx` 是 65536，SearXNG 是 `http://127.0.0.1:8080`。Ingest 模式預設是 `analyze`（分析與產生，不建 link）；`link` 是只建 `raw/sources/` 的相對 symlink。缺鍵或不認得的值都當成 `analyze`。`lintSemantic` 與 `noteAutosave` 只有字串 `true` 算勾選，預設不勾。忽略頁是另一把鍵 `lintIgnore.` 加上 wiki root canonical 路徑的 SHA-256，不跟 `StudySettings` 一起存。`save(StudySettings)` 會寫 `noteAutosave`，不碰 `lintIgnore`。Chat 歷史不在這裡。Lint 結果只在記憶體。SearXNG 連線狀態也不在這裡。筆記編輯的草稿與衝突狀態只在記憶體。
+偏好在 Java Preferences 節點 `com/neojou/mystudy/wiki`，同樣不進 vault。內容是 vault 路徑、wiki root、Ollama URL、模型、`num_ctx`、SearXNG URL、Ingest 模式、`lintSemantic`、`noteAutosave`，以及版面的 `ui.sidebarWidthDp`、`ui.editorSubMode`、`ui.limitLineWidth`。預設 URL 是 `http://127.0.0.1:11434/v1`，模型 `gemma4-64k`，`num_ctx` 是 65536，SearXNG 是 `http://127.0.0.1:8080`。Ingest 模式預設是 `analyze`（分析與產生，不建 link）；`link` 是只建 `raw/sources/` 的相對 symlink。缺鍵或不認得的值都當成 `analyze`。`lintSemantic` 與 `noteAutosave` 只有字串 `true` 算勾選，預設不勾。側欄寬度缺鍵或壞值是 260，並夾在 180..560。子模式除了 `source` 以外都是即時預覽。限寬只有字串 `false` 是關。忽略頁是另一把鍵 `lintIgnore.` 加上 wiki root canonical 路徑的 SHA-256，不跟 `StudySettings` 一起存。`save(StudySettings)` 會寫 `noteAutosave`，不碰 `lintIgnore`，也不碰三個 `ui.*` 鍵。限寬核取方塊立刻寫自己的鍵，不經 Settings 的 Save。Chat 歷史不在這裡。Lint 結果只在記憶體。SearXNG 連線狀態也不在這裡。筆記編輯的草稿、衝突、側欄開合與 Properties 折疊只在記憶體。
 
 Ollama 主機必須是 `127.0.0.1` 或 `localhost`。客戶端拿掉 URL 的 `/v1`，改打 native `/api/chat`，這樣才能設 `num_ctx`。`/v1/chat/completions` 設不了 context 長度。深度研究的綜整用同一條 loopback，但是 `stream: true`。Wiki Lint 的語意健檢用 `complete()`，`stream: false`。`complete()` 仍是 `stream: false`。
 

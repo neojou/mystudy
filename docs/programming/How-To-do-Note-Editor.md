@@ -6,16 +6,16 @@
 
 ## 畫面
 
-開檔一律是閱讀。不記上次模式。
+開檔一律是閱讀。不記上次模式。標頭、側欄、Live Preview、Properties 與狀態列的排列在 `docs/programming/How-To-do-UI-Layout.md`。
 
-工具列是 `[Ingest] 標題 ● [閱讀|編輯] [複製全文] [存檔]`。未存時標題後面有 `●`，主視窗標題是 `mystudy ●`。Ask、Chat 那些子視窗不顯示這個標記。
+未存時標題後面有 `●`，主視窗標題是 `mystudy ●`。Ask、Chat 那些子視窗不顯示這個標記。`EditorChrome` 的這個行為不變。
 
-- 閱讀：開頭若是閉合的 `---` frontmatter，先放等寬灰框，其餘交給既有的 `MarkdownText`。`MarkdownText` 本身不改。「複製全文」複製編輯緩衝（LF、無 BOM），不是畫面上的渲染結果。
-- 編輯：`BasicTextField` 加 `TextFieldState`。等寬、軟換行。復原走欄位內建的 undo。`Ctrl/Cmd+Z` 與 `Ctrl/Cmd+Y` 不攔截。
-- `Ctrl/Cmd+E` 在可編輯時切換閱讀／編輯。`Ctrl/Cmd+S` 在編輯中且有未存變更時立刻存檔。兩個快捷鍵都吃掉，避免字母進到欄位裡。
+- 閱讀不寫檔。閉合的 frontmatter 以唯讀 Properties 顯示，正文用 Document 樣式渲染。「複製全文」複製編輯緩衝（LF、無 BOM），不是畫面上的渲染結果。
+- 編輯：`BasicTextField` 加 `TextFieldState`。即時預覽與 Source 共用這一個狀態。等寬、軟換行。復原走欄位內建的 undo。`Ctrl/Cmd+Z` 與 `Ctrl/Cmd+Y` 不攔截。
+- `Ctrl/Cmd+E` 在可編輯時切換閱讀／編輯。`Ctrl/Cmd+Shift+E` 在編輯中切換即時預覽／Source。`Ctrl/Cmd+S` 在編輯中且有未存變更時立刻存檔。這些快捷鍵都吃掉，避免字母進到欄位裡。
 - 唯讀時編輯鈕停用，狀態列是「唯讀：」加上原因。非文字、過大、非 UTF-8 的內容區顯示「無法預覽此檔案類型」，不把截斷或錯誤字串放進可編輯緩衝。
-- 狀態列另有「未儲存變更」「存檔中…」「已存 HH:mm」、失敗原因、衝突。`index.md`、`log.md`、`review.md` 另顯示「此檔由 Ingest、Lint 或深度研究維護」。混用換行時另顯示警告。
-- 檔案樹沒有右鍵選單。點檔案只開啟預覽。編輯、存檔、複製都是預覽區按鈕。
+- 狀態列另有「未儲存變更」「存檔中…」「已存 HH:mm」、失敗原因、衝突。`index.md`、`log.md`、`review.md` 的維護警示、換行混用與 Ingest 提示在狀態列中段。外部變更橫幅仍在內容上方。
+- 檔案樹沒有右鍵選單。點檔案只開啟預覽。編輯、存檔、複製都是預覽區按鈕。Ingest 在標頭最右，不取代模式或存檔。
 
 存檔不設全域 busy。
 
@@ -71,7 +71,7 @@ Browse 的 `openIndexed` 仍讀索引正文，不進這個編輯器。
 
 ## 這一版不做
 
-Live Preview、`[[` 自動完成、Properties、多分頁、檔案歷史、自動合併。留到之後的版本。
+區塊級 Live Preview（游標所在區塊才露原始碼）、`[[` 自動完成、多分頁、檔案歷史、自動合併、暗色、大綱、字級縮放。分割檢視的即時預覽與唯讀 Properties 已在 `docs/programming/How-To-do-UI-Layout.md`。
 
 ## 測試
 
@@ -96,7 +96,7 @@ Live Preview、`[[` 自動完成、Properties、多分頁、檔案歷史、自�
 ./gradlew :composeApp:run
 ```
 
-- 開 `.md` 先是閱讀。frontmatter 在灰框，其餘是 Markdown。
+- 開 `.md` 先是閱讀。frontmatter 是 Properties，其餘是 Markdown。表格有表頭與格線。
 - 「複製全文」是原始 Markdown。
 - `Ctrl/Cmd+E` 進入編輯。打字後標題與主視窗標題出現 `●`。`Ctrl/Cmd+Z` 可復原。
 - `Ctrl/Cmd+S` 存檔後 `●` 消失。用另一個程式改同一個檔，再存會出現衝突，取消不覆寫。

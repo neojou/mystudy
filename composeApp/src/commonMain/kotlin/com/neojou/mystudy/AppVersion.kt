@@ -26,5 +26,5 @@ object AppVersion {
      *
      * `./configure.sh version` rewrites the literal on this line.
      */
-    const val NAME: String = "1.1.0" // configure:app.version
+    const val NAME: String = "1.2.0" // configure:app.version
 }

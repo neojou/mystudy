@@ -134,6 +134,6 @@ private fun ChatTurnView(question: String, steps: List<String>, answer: String) 
                 }
             }
         }
-        if (answer.isNotBlank()) MarkdownText(answer)
+        if (answer.isNotBlank()) MarkdownText(answer, style = MarkdownStyle.Compact)
     }
 }

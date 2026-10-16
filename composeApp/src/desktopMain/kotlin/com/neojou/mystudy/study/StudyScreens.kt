@@ -153,7 +153,7 @@ fun AskPane(controller: StudyController, modifier: Modifier = Modifier) {
         }
         CopyableScroll(Modifier.weight(1f).fillMaxWidth()) {
             if (controller.answer.isNotBlank()) {
-                MarkdownText(controller.answer)
+                MarkdownText(controller.answer, style = MarkdownStyle.Compact)
             }
         }
         if (controller.askPages.isNotEmpty()) {
@@ -283,6 +283,22 @@ fun SettingsPane(controller: StudyController, modifier: Modifier = Modifier) {
             Checkbox(checked = noteAutosave, onCheckedChange = { noteAutosave = it })
             Text("停止編輯 2 秒後自動存檔")
         }
+        Row(
+            modifier = Modifier.fillMaxWidth().clickable {
+                controller.setLimitLineWidth(!controller.ui.limitLineWidth)
+            },
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Checkbox(
+                checked = controller.ui.limitLineWidth,
+                onCheckedChange = controller::setLimitLineWidth,
+            )
+            Text("限制閱讀寬度")
+        }
+        Text(
+            "閱讀與即時預覽最寬 760。這項立刻記住，不必按 Save。",
+            style = MaterialTheme.typography.bodySmall,
+        )
         localError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = {

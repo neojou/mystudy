@@ -1,13 +1,13 @@
 package com.neojou.mystudy.wiki
 
 import com.neojou.mystudy.study.GraphHit
-import com.neojou.mystudy.study.MarkdownBlock
 import com.neojou.mystudy.study.circleLayout
 import com.neojou.mystudy.study.hitGraph
 import com.neojou.mystudy.study.previewOffersIngest
 import com.neojou.mystudy.study.vaultTreeLabel
 import com.neojou.mystudy.study.inlineMarkdown
-import com.neojou.mystudy.study.markdownBlocks
+import com.neojou.mystudy.study.markdown.MarkdownBlock
+import com.neojou.mystudy.study.markdown.markdownBlocks
 import com.neojou.mystudy.wiki.ask.AskPipeline
 import com.neojou.mystudy.wiki.ask.AskResult
 import com.neojou.mystudy.wiki.ask.DraftPage

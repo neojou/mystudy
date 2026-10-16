@@ -53,6 +53,24 @@ class PreferencesSettingsStore : SettingsStore {
 }
 
 class AppSettings(private val store: SettingsStore) {
+    fun loadUi(): UiPreferences = UiPreferences(
+        sidebarWidthDp = parseSidebarWidth(store.get(KEY_SIDEBAR_WIDTH, "")),
+        editorSubMode = editorSubModeFromStored(store.get(KEY_EDITOR_SUBMODE, "")),
+        limitLineWidth = limitLineWidthFromStored(store.get(KEY_LIMIT_LINE_WIDTH, "")),
+    )
+
+    fun saveSidebarWidth(dp: Int) {
+        store.put(KEY_SIDEBAR_WIDTH, dp.coerceIn(SIDEBAR_MIN_DP, SIDEBAR_MAX_DP).toString())
+    }
+
+    fun saveEditorSubMode(mode: EditorSubMode) {
+        store.put(KEY_EDITOR_SUBMODE, mode.stored())
+    }
+
+    fun saveLimitLineWidth(enabled: Boolean) {
+        store.put(KEY_LIMIT_LINE_WIDTH, if (enabled) "true" else "false")
+    }
+
     fun load(): StudySettings = StudySettings(
         vaultPath = store.get(KEY_VAULT, DEFAULT_VAULT).ifBlank { DEFAULT_VAULT },
         wikiRootPath = store.get(KEY_WIKI_ROOT, ""),
@@ -133,6 +151,9 @@ class AppSettings(private val store: SettingsStore) {
         private const val KEY_INGEST_MODE = "ingestMode"
         private const val KEY_LINT_SEMANTIC = "lintSemantic"
         private const val KEY_NOTE_AUTOSAVE = "noteAutosave"
+        private const val KEY_SIDEBAR_WIDTH = "ui.sidebarWidthDp"
+        private const val KEY_EDITOR_SUBMODE = "ui.editorSubMode"
+        private const val KEY_LIMIT_LINE_WIDTH = "ui.limitLineWidth"
 
         private fun lintIgnoreKey(rootPath: String): String {
             val canonicalPath = canonical(Path.of(rootPath)).toString()
